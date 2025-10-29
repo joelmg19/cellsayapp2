@@ -68,7 +68,8 @@ class DetectionPostProcessor {
         final iou = _computeIoU(kept.boundingBox, candidate.boundingBox);
         final sameLabel =
             kept.normalizedLabel == candidate.normalizedLabel;
-        if ((sameLabel && iou >= _iouThreshold) ||
+        if ((sameLabel &&
+                _shouldSuppressDuplicate(kept, candidate, iou: iou)) ||
             // Guard against duplicate boxes emitted with different labels
             // by rejecting near-identical overlaps.
             iou >= 0.99) {
@@ -157,6 +158,62 @@ class DetectionPostProcessor {
     final areaB = max(0.0, rectB.width) * max(0.0, rectB.height);
     final union = areaA + areaB - intersectionArea + 1e-6;
     return union <= 0 ? 0 : intersectionArea / union;
+  }
+
+  bool _shouldSuppressDuplicate(
+    _DetectionCandidate kept,
+    _DetectionCandidate candidate, {
+    required double iou,
+  }) {
+    if (iou >= _iouThreshold) {
+      return true;
+    }
+
+    final coverage = _computeCoverageFraction(
+      kept.boundingBox,
+      candidate.boundingBox,
+    );
+
+    if (coverage >= 0.9) {
+      return true;
+    }
+
+    if (coverage >= 0.75) {
+      final Offset delta = kept.boundingBox.center - candidate.boundingBox.center;
+      final double distance = sqrt(delta.dx * delta.dx + delta.dy * delta.dy);
+      final double reference = min(
+        _rectDiagonal(kept.boundingBox),
+        _rectDiagonal(candidate.boundingBox),
+      );
+      if (reference > 0 && distance <= reference * 0.2) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  double _computeCoverageFraction(Rect a, Rect b) {
+    final rectA = _normalizeRect(a);
+    final rectB = _normalizeRect(b);
+    final intersection = rectA.intersect(rectB);
+    final intersectionArea =
+        max(0.0, intersection.width) * max(0.0, intersection.height);
+    if (intersectionArea <= 0) {
+      return 0.0;
+    }
+
+    final areaA = max(0.0, rectA.width) * max(0.0, rectA.height);
+    final areaB = max(0.0, rectB.width) * max(0.0, rectB.height);
+    final minArea = max(1e-6, min(areaA, areaB));
+    return intersectionArea / minArea;
+  }
+
+  double _rectDiagonal(Rect rect) {
+    final normalized = _normalizeRect(rect);
+    final width = max(0.0, normalized.width);
+    final height = max(0.0, normalized.height);
+    return sqrt(width * width + height * height);
   }
 }
 
