@@ -43,7 +43,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _readMenu() async {
     await _speak(
-      'Menú principal. Opciones: Dinero (Modo Voz), Dinero (Detección Continua), Objetos, Lectura, Hora, Clima. Diga una opción.',
+      'Menú principal. Opciones: Dinero (Modo Voz), Objetos, Lectura, Hora, Clima. Diga una opción.',
     );
   }
 
@@ -81,14 +81,6 @@ class _MenuScreenState extends State<MenuScreen> {
       setState(() => _isListening = false);
       if (!mounted) return;
       Navigator.pushNamed(context, '/money');
-      return;
-    }
-    if (t.contains('dinero') && (t.contains('detección') || t.contains('continua'))) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      // Usamos el argumento 'dinero' para la detección continua
-      Navigator.pushNamed(context, '/camera', arguments: 'dinero');
       return;
     }
     if (t.contains('objeto')) {
@@ -134,13 +126,6 @@ class _MenuScreenState extends State<MenuScreen> {
         label: 'Dinero (Modo Voz - 1 billete)',
         icon: Icons.attach_money_rounded,
         onTap: () => Navigator.pushNamed(context, '/money'),
-      ),
-      // 2. NUEVO BOTÓN para Detección Continua
-      _BigButton(
-        label: 'Detección CONTINUA de Billetes',
-        icon: Icons.currency_exchange_rounded,
-        // Al pasar 'dinero' como argumento, activamos la lógica en lib/main.dart
-        onTap: () => Navigator.pushNamed(context, '/camera', arguments: 'dinero'),
       ),
       _BigButton(
         label: 'Objetos',
