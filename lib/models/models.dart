@@ -2,12 +2,7 @@ import 'package:ultralytics_yolo/models/yolo_task.dart';
 
 enum ModelType {
   Interior('yolo11n', YOLOTask.detect, 'Detección General'), // Cambié Interior para que cargue yolo11n
-  Exterior('best_float16', YOLOTask.detect, 'Detección Exterior'),
-  // ------------------------------------
-  // NUEVO MODELO DE DETECCIÓN CONTINUA
-  // Usamos 'billetes32' que es tu archivo TFLite
-  // ------------------------------------
-  Billetes32('billetes32', YOLOTask.detect, 'Billetes CLP (Detección Continua)');
+  Exterior('best_float16', YOLOTask.detect, 'Detección Exterior');
 
   const ModelType(this.modelName, this.task, this.displayName);
 
@@ -24,10 +19,9 @@ ModelType modelTypeFromString(String? value, {ModelType fallback = ModelType.Int
       return ModelType.Interior;
     case 'exterior':
       return ModelType.Exterior;
-    case 'billetes32':
     case 'dinero':
-    case 'money': // Agregué 'money' por si acaso
-      return ModelType.Billetes32;
+    case 'money': // Compatibilidad con valores previos
+      return ModelType.Interior;
   }
   return fallback;
 }

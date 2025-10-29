@@ -12,7 +12,7 @@ import '../widgets/voice_settings_sheet.dart';
 ///
 /// This screen provides:
 /// - Live camera feed with YOLO object detection
-/// - Model selection (Interior, Exterior, Billetes32)
+/// - Model selection (Interior, Exterior)
 /// - Adjustable thresholds (confidence, IoU, max detections)
 /// - Camera controls (flip, zoom)
 /// - Performance metrics (FPS)

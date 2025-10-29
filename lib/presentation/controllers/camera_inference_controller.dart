@@ -135,14 +135,11 @@ class CameraInferenceController extends ChangeNotifier {
     );
   }
 
-  // FUNCIONES CORREGIDAS: Añaden ModelType.Billetes32
   static double _defaultConfidence(ModelType model) {
     switch (model) {
       case ModelType.Interior:
       case ModelType.Exterior:
         return 0.5;
-      case ModelType.Billetes32: // Añadido el nuevo modelo
-        return 0.25; // Umbral más bajo para detección de objetos
     }
   }
 
@@ -150,8 +147,6 @@ class CameraInferenceController extends ChangeNotifier {
     switch (model) {
       case ModelType.Interior:
       case ModelType.Exterior:
-        return 30;
-      case ModelType.Billetes32: // Añadido el nuevo modelo
         return 30;
     }
   }
