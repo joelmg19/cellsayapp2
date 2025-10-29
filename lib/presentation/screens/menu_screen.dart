@@ -43,7 +43,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _readMenu() async {
     await _speak(
-      'Menú principal. Opciones: Dinero (Modo Voz), Objetos, Lectura, Hora, Clima. Diga una opción.',
+      'Menú principal. Opciones: Dinero, Objetos, Lectura, Hora, Clima. Diga una opción.',
     );
   }
 
@@ -123,7 +123,7 @@ class _MenuScreenState extends State<MenuScreen> {
     final buttons = <_BigButton>[
       // 1. Botón para el modo de voz (el que tenías antes)
       _BigButton(
-        label: 'Dinero (Modo Voz - 1 billete)',
+        label: 'Dinero',
         icon: Icons.attach_money_rounded,
         onTap: () => Navigator.pushNamed(context, '/money'),
       ),

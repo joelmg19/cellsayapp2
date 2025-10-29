@@ -4,6 +4,16 @@ import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../core/vision/detection_geometry.dart';
 import '../models/detection_insight.dart';
 
+Rect _normalizeRect(Rect rect) {
+  final left = min(rect.left, rect.right);
+  final right = max(rect.left, rect.right);
+  final top = min(rect.top, rect.bottom);
+  final bottom = max(rect.top, rect.bottom);
+  return Rect.fromLTRB(left, top, right, bottom);
+}
+
+String _normalizeLabel(String label) => label.trim().toLowerCase();
+
 /// Applies additional post processing to YOLO detections improving NMS
 /// and extracting semantic information useful for voice feedback.
 class DetectionPostProcessor {
@@ -55,12 +65,16 @@ class DetectionPostProcessor {
     for (final candidate in candidates) {
       bool shouldSelect = true;
       for (final kept in selected) {
-        if (kept.label == candidate.label) {
-          final iou = _computeIoU(kept.boundingBox, candidate.boundingBox);
-          if (iou > _iouThreshold) {
-            shouldSelect = false;
-            break;
-          }
+        final iou = _computeIoU(kept.boundingBox, candidate.boundingBox);
+        final sameLabel =
+            kept.normalizedLabel == candidate.normalizedLabel;
+        if ((sameLabel &&
+                _shouldSuppressDuplicate(kept, candidate, iou: iou)) ||
+            // Guard against duplicate boxes emitted with different labels
+            // by rejecting near-identical overlaps.
+            iou >= 0.99) {
+          shouldSelect = false;
+          break;
         }
       }
 
@@ -97,7 +111,7 @@ class DetectionPostProcessor {
 
   String? _detectMovement(_DetectionCandidate candidate) {
     final previous = _previousDetections.where(
-      (tracked) => tracked.label == candidate.label,
+      (tracked) => tracked.normalizedLabel == candidate.normalizedLabel,
     );
 
     _TrackedDetection? bestMatch;
@@ -135,28 +149,112 @@ class DetectionPostProcessor {
   }
 
   double _computeIoU(Rect a, Rect b) {
-    final intersection = a.intersect(b);
-    final intersectionArea = max(0.0, intersection.width) * max(0.0, intersection.height);
-    final areaA = max(0.0, a.width) * max(0.0, a.height);
-    final areaB = max(0.0, b.width) * max(0.0, b.height);
+    final rectA = _normalizeRect(a);
+    final rectB = _normalizeRect(b);
+    final intersection = rectA.intersect(rectB);
+    final intersectionArea =
+        max(0.0, intersection.width) * max(0.0, intersection.height);
+    final areaA = max(0.0, rectA.width) * max(0.0, rectA.height);
+    final areaB = max(0.0, rectB.width) * max(0.0, rectB.height);
     final union = areaA + areaB - intersectionArea + 1e-6;
     return union <= 0 ? 0 : intersectionArea / union;
+  }
+
+  bool _shouldSuppressDuplicate(
+    _DetectionCandidate kept,
+    _DetectionCandidate candidate, {
+    required double iou,
+  }) {
+    if (iou >= _iouThreshold) {
+      return true;
+    }
+
+    final coverage = _computeCoverageFraction(
+      kept.boundingBox,
+      candidate.boundingBox,
+    );
+
+    if (coverage >= 0.9) {
+      return true;
+    }
+
+    if (coverage >= 0.75) {
+      final Offset delta = kept.boundingBox.center - candidate.boundingBox.center;
+      final double distance = sqrt(delta.dx * delta.dx + delta.dy * delta.dy);
+      final double reference = min(
+        _rectDiagonal(kept.boundingBox),
+        _rectDiagonal(candidate.boundingBox),
+      );
+      if (reference > 0 && distance <= reference * 0.2) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  double _computeCoverageFraction(Rect a, Rect b) {
+    final rectA = _normalizeRect(a);
+    final rectB = _normalizeRect(b);
+    final intersection = rectA.intersect(rectB);
+    final intersectionArea =
+        max(0.0, intersection.width) * max(0.0, intersection.height);
+    if (intersectionArea <= 0) {
+      return 0.0;
+    }
+
+    final areaA = max(0.0, rectA.width) * max(0.0, rectA.height);
+    final areaB = max(0.0, rectB.width) * max(0.0, rectB.height);
+    final minArea = max(1e-6, min(areaA, areaB));
+    return intersectionArea / minArea;
+  }
+
+  double _rectDiagonal(Rect rect) {
+    final normalized = _normalizeRect(rect);
+    final width = max(0.0, normalized.width);
+    final height = max(0.0, normalized.height);
+    return sqrt(width * width + height * height);
   }
 }
 
 class _DetectionCandidate {
-  _DetectionCandidate({
+  _DetectionCandidate._({
     required this.original,
     required this.boundingBox,
     required this.confidence,
     required this.label,
+    required this.normalizedLabel,
+    required this.normalizedArea,
     required this.trafficLightSignal,
-  }) : normalizedArea = max(0.0, boundingBox.width) * max(0.0, boundingBox.height);
+  });
+
+  factory _DetectionCandidate({
+    required YOLOResult original,
+    required Rect boundingBox,
+    required double confidence,
+    required String label,
+    required String normalizedLabel,
+    required TrafficLightSignal trafficLightSignal,
+  }) {
+    final normalizedBox = _normalizeRect(boundingBox);
+    final area =
+        max(0.0, normalizedBox.width) * max(0.0, normalizedBox.height);
+    return _DetectionCandidate._(
+      original: original,
+      boundingBox: normalizedBox,
+      confidence: confidence,
+      label: label,
+      normalizedLabel: normalizedLabel,
+      normalizedArea: area,
+      trafficLightSignal: trafficLightSignal,
+    );
+  }
 
   final YOLOResult original;
   final Rect boundingBox;
   final double confidence;
   final String label;
+  final String normalizedLabel;
   final double normalizedArea;
   final TrafficLightSignal trafficLightSignal;
 
@@ -164,6 +262,7 @@ class _DetectionCandidate {
     final rect = extractBoundingBox(result);
     final confidence = extractConfidence(result) ?? 0.0;
     final label = extractLabel(result);
+    final normalizedLabel = _normalizeLabel(label);
     final signal = _inferTrafficLightSignal(result, label);
 
     if (rect == null) {
@@ -175,6 +274,7 @@ class _DetectionCandidate {
       boundingBox: rect,
       confidence: confidence,
       label: label,
+      normalizedLabel: normalizedLabel,
       trafficLightSignal: signal,
     );
   }
@@ -183,17 +283,20 @@ class _DetectionCandidate {
 class _TrackedDetection {
   _TrackedDetection({
     required this.label,
+    required this.normalizedLabel,
     required this.boundingBox,
     required this.normalizedArea,
   });
 
   final String label;
+  final String normalizedLabel;
   final Rect boundingBox;
   final double normalizedArea;
 
   factory _TrackedDetection.fromCandidate(_DetectionCandidate candidate) {
     return _TrackedDetection(
       label: candidate.label,
+      normalizedLabel: candidate.normalizedLabel,
       boundingBox: candidate.boundingBox,
       normalizedArea: candidate.normalizedArea,
     );
