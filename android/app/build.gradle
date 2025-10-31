@@ -50,6 +50,14 @@ flutter {
 }
 
 dependencies {
-    implementation "com.google.ar:core:1.45.0"
-    implementation "org.tensorflow:tensorflow-lite:2.14.0"
+    implementation "org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.2"
+}
+
+configurations.all {
+    exclude group: "com.google.ai.edge.litert"
+    resolutionStrategy {
+        force "org.tensorflow:tensorflow-lite:2.11.0"
+        force "org.tensorflow:tensorflow-lite-api:2.11.0"
+        force "org.tensorflow:tensorflow-lite-gpu:2.11.0"
+    }
 }
