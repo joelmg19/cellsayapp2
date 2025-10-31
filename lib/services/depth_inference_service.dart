@@ -120,8 +120,8 @@ class DepthInferenceService {
   Interpreter? _interpreter;
   List<int>? _inputShape;
   List<int>? _outputShape;
-  TfLiteType? _inputType;
-  TfLiteType? _outputType;
+  TensorType? _inputType;
+  TensorType? _outputType;
   bool _isProcessing = false;
   bool _initializationAttempted = false;
 
@@ -191,7 +191,7 @@ class DepthInferenceService {
       final input = _prepareInputTensor(
         resized,
         targetChannels,
-        _inputType ?? TfLiteType.float32,
+        _inputType ?? TensorType.float32,
       );
 
       final outputContainer = _createOutputContainer();
@@ -231,20 +231,20 @@ class DepthInferenceService {
   dynamic _prepareInputTensor(
     img.Image image,
     int channels,
-    TfLiteType inputType,
+    TensorType inputType,
   ) {
     final height = image.height;
     final width = image.width;
 
-    dynamic channelValues(int pixel) {
-      final r = img.getRed(pixel);
-      final g = img.getGreen(pixel);
-      final b = img.getBlue(pixel);
+    dynamic channelValues(img.Pixel pixel) {
+      final r = pixel.r;
+      final g = pixel.g;
+      final b = pixel.b;
       if (channels <= 1) {
         final luminance = img.getLuminanceRgb(r, g, b);
         return [luminance];
       }
-      if (inputType == TfLiteType.float32) {
+      if (inputType == TensorType.float32) {
         return [r / 255.0, g / 255.0, b / 255.0];
       }
       return [r, g, b];
@@ -256,7 +256,7 @@ class DepthInferenceService {
         return List.generate(width, (x) {
           final pixel = image.getPixel(x, y);
           final values = channelValues(pixel);
-          if (inputType == TfLiteType.float32) {
+          if (inputType == TensorType.float32) {
             return values.map((value) {
               if (value is num) {
                 return value.toDouble();
@@ -286,7 +286,7 @@ class DepthInferenceService {
     return [
       List.generate(height, (_) {
         return List.generate(width, (_) {
-          if ((_outputType ?? TfLiteType.float32) == TfLiteType.float32) {
+          if ((_outputType ?? TensorType.float32) == TensorType.float32) {
             if (channels <= 1) {
               return [0.0];
             }
