@@ -71,6 +71,7 @@ class CameraInferenceController extends ChangeNotifier {
   bool _loggedMissingDistanceEstimator = false;
   DepthInferenceService? _depthService;
   DepthFrame? _latestDepthFrame;
+  bool _isDepthProcessingEnabled = false;
 
   // Performance optimization
   bool _isDisposed = false;
@@ -113,6 +114,8 @@ class CameraInferenceController extends ChangeNotifier {
   String? get voiceCommandStatus => _voiceCommandStatus;
   bool get isListeningForCommand => _isListeningForCommand;
   YOLOViewController get yoloController => _yoloController;
+  bool get isDepthProcessingEnabled => _isDepthProcessingEnabled;
+  bool get isDepthServiceAvailable => _depthService != null;
 
   CameraInferenceController({ModelType initialModel = ModelType.Interior})
       : _selectedModel = initialModel,
@@ -299,11 +302,15 @@ class CameraInferenceController extends ChangeNotifier {
     }
 
     if (originalImage != null && results.isNotEmpty) {
-      final depthService = _depthService;
-      if (depthService != null) {
-        final depthFrame = await depthService.estimateDepth(originalImage);
-        if (_isDisposed) return;
-        _latestDepthFrame = depthFrame;
+      if (_isDepthProcessingEnabled) {
+        final depthService = _depthService;
+        if (depthService != null) {
+          final depthFrame = await depthService.estimateDepth(originalImage);
+          if (_isDisposed) return;
+          _latestDepthFrame = depthFrame;
+        } else {
+          _latestDepthFrame = null;
+        }
       } else {
         _latestDepthFrame = null;
       }
@@ -1104,11 +1111,22 @@ class CameraInferenceController extends ChangeNotifier {
         return;
       }
       _depthService = service;
+      notifyListeners();
     } catch (error, stackTrace) {
       if (_isDisposed) return;
       debugPrint('DepthInferenceService: error al inicializar - $error');
       debugPrint('$stackTrace');
+      notifyListeners();
     }
+  }
+
+  void setDepthProcessingEnabled(bool enabled) {
+    if (_isDepthProcessingEnabled == enabled) return;
+    _isDepthProcessingEnabled = enabled;
+    if (!enabled) {
+      _latestDepthFrame = null;
+    }
+    notifyListeners();
   }
 
   Future<void> _announceSystemMessage(
