@@ -27,6 +27,13 @@ class CameraInferenceOverlay extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          DepthControlSection(
+            isEnabled: controller.isDepthProcessingEnabled,
+            isAvailable: controller.isDepthServiceAvailable,
+            onChanged: controller.setDepthProcessingEnabled,
+            textScaleFactor: controller.fontScale,
+          ),
+          SizedBox(height: isLandscape ? 8 : 12),
           ModelSelector(
             selectedModel: controller.selectedModel,
             isModelLoading: controller.isModelLoading,

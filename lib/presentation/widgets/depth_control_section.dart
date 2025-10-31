@@ -23,11 +23,10 @@ class DepthControlSection extends StatelessWidget {
         : 'No disponible';
 
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         children: [
@@ -37,19 +36,20 @@ class DepthControlSection extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Profundidad en objetos',
-                  style: theme.textTheme.bodyLarge?.copyWith(
+                  'PROFUNDIDAD',
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16 * textScaleFactor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12 * textScaleFactor,
+                    letterSpacing: 0.6,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   description,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: Colors.white.withOpacity(0.8),
-                    fontSize: 13 * textScaleFactor,
+                    fontSize: 12 * textScaleFactor,
                   ),
                 ),
               ],
