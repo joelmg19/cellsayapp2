@@ -172,13 +172,13 @@ class DepthAnythingProcessor {
         final pixel = resized.getPixel(x, y);
         final channels = input[0][y][x];
         if (_inputChannels >= 1) {
-          channels[0] = img.getRed(pixel) / 255.0;
+          channels[0] = pixel.rNormalized.toDouble();
         }
         if (_inputChannels >= 2) {
-          channels[1] = img.getGreen(pixel) / 255.0;
+          channels[1] = pixel.gNormalized.toDouble();
         }
         if (_inputChannels >= 3) {
-          channels[2] = img.getBlue(pixel) / 255.0;
+          channels[2] = pixel.bNormalized.toDouble();
         }
       }
     }
