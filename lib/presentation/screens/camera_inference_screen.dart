@@ -24,6 +24,8 @@ class CameraInferenceScreen extends StatefulWidget {
   });
 
   final ModelType modelType;
+  final bool showDepthControls;
+  final bool enableDepthProcessing;
 
   @override
   State<CameraInferenceScreen> createState() => _CameraInferenceScreenState();
@@ -42,6 +44,13 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
         _showError('Model Loading Error', error.toString());
       }
     });
+    if (widget.enableDepthProcessing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _controller.setDepthProcessingEnabled(true);
+        }
+      });
+    }
   }
 
   @override
@@ -65,6 +74,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
               CameraInferenceOverlay(
                 controller: _controller,
                 isLandscape: isLandscape,
+                showDepthControls: widget.showDepthControls,
               ),
               CameraControls(
                 currentZoomLevel: _controller.currentZoomLevel,

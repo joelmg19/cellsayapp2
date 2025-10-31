@@ -4,6 +4,7 @@ import '../controllers/camera_inference_controller.dart';
 import 'detection_stats_display.dart';
 import 'model_selector.dart';
 import 'threshold_pill.dart';
+import 'depth_control_section.dart';
 
 /// Top overlay widget containing model selector, stats, and threshold pills
 class CameraInferenceOverlay extends StatelessWidget {
@@ -11,10 +12,12 @@ class CameraInferenceOverlay extends StatelessWidget {
     super.key,
     required this.controller,
     required this.isLandscape,
+    this.showDepthControls = false,
   });
 
   final CameraInferenceController controller;
   final bool isLandscape;
+  final bool showDepthControls;
 
   @override
   Widget build(BuildContext context) {
