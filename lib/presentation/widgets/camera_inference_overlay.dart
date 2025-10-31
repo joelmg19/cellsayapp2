@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/models.dart';
 import '../controllers/camera_inference_controller.dart';
 import 'detection_stats_display.dart';
+import 'depth_control_section.dart';
 import 'model_selector.dart';
 import 'threshold_pill.dart';
 
@@ -26,6 +27,13 @@ class CameraInferenceOverlay extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          DepthControlSection(
+            isEnabled: controller.isDepthProcessingEnabled,
+            isAvailable: controller.isDepthServiceAvailable,
+            onChanged: controller.setDepthProcessingEnabled,
+            textScaleFactor: controller.fontScale,
+          ),
+          SizedBox(height: isLandscape ? 8 : 12),
           ModelSelector(
             selectedModel: controller.selectedModel,
             isModelLoading: controller.isModelLoading,
@@ -39,6 +47,13 @@ class CameraInferenceOverlay extends StatelessWidget {
           DetectionStatsDisplay(
             detectionCount: controller.detectionCount,
             currentFps: controller.currentFps,
+            textScaleFactor: controller.fontScale,
+          ),
+          const SizedBox(height: 8),
+          DepthControlSection(
+            isEnabled: controller.isDepthProcessingEnabled,
+            isAvailable: controller.isDepthServiceAvailable,
+            onChanged: controller.setDepthProcessingEnabled,
             textScaleFactor: controller.fontScale,
           ),
           const SizedBox(height: 8),
