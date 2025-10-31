@@ -63,18 +63,6 @@ class AccessibilityStatusBar extends StatelessWidget {
         ),
       );
     }
-    final navigationInstruction = controller.navigationInstruction;
-    if (navigationInstruction != null) {
-      alertChips.add(
-        _AlertChip(
-          text: 'Guía: $navigationInstruction',
-          color: controller.usedDepthNavigation
-              ? Colors.lightBlueAccent
-              : Colors.blueGrey,
-          fontScale: fontScale,
-        ),
-      );
-    }
     final trafficMessage = _trafficMessage(detections.trafficLightSignal);
     if (trafficMessage != null) {
       alertChips.add(

@@ -1,7 +1,5 @@
 
 import 'package:flutter/material.dart';
-import 'package:ultralytics_yolo/models/yolo_task.dart';
-
 import '../../models/models.dart';
 
 /// A widget for selecting different YOLO model types
@@ -30,9 +28,7 @@ class ModelSelector extends StatelessWidget {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: ModelType.values
-            .where((model) => model.task == YOLOTask.detect)
-            .map((model) {
+        children: ModelType.values.map((model) {
           final isSelected = selectedModel == model;
           return GestureDetector(
             onTap: () {

@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:image/image.dart' as img;
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
@@ -11,12 +9,10 @@ import '../../core/vision/detection_distance_extension.dart';
 import '../../core/vision/detection_geometry.dart';
 import '../../core/vision/distance_estimator.dart';
 import '../../core/vision/distance_estimator_provider.dart';
-import '../../models/depth_navigation.dart';
 import '../../models/detection_insight.dart';
 import '../../models/models.dart';
 import '../../models/voice_settings.dart';
 import '../../services/detection_post_processor.dart';
-import '../../services/depth_navigation_service.dart';
 import '../../services/model_manager.dart';
 import '../../services/voice_announcer.dart';
 import '../../services/voice_command_service.dart';
@@ -67,13 +63,10 @@ class CameraInferenceController extends ChangeNotifier {
   final VoiceAnnouncer _voiceAnnouncer = VoiceAnnouncer();
   final VoiceCommandService _voiceCommandService = VoiceCommandService();
   final WeatherService _weatherService = WeatherService();
-  final DepthNavigationService _depthNavigationService = DepthNavigationService();
   final DistanceEstimatorProvider _distanceEstimatorProvider =
   DistanceEstimatorProvider();
   DistanceEstimator? _distanceEstimator;
   bool _loggedMissingDistanceEstimator = false;
-  DepthNavigationResult? _navigationResult;
-  bool _isDepthProcessing = false;
 
   // Performance optimization
   bool _isDisposed = false;
@@ -116,14 +109,6 @@ class CameraInferenceController extends ChangeNotifier {
   String? get voiceCommandStatus => _voiceCommandStatus;
   bool get isListeningForCommand => _isListeningForCommand;
   YOLOViewController get yoloController => _yoloController;
-  String? get navigationInstruction {
-    final instruction = _navigationResult?.instruction.trim();
-    if (instruction == null || instruction.isEmpty) return null;
-    return instruction;
-  }
-  List<NavigationObstacle> get navigationObstacles =>
-      _navigationResult?.obstacles ?? const <NavigationObstacle>[];
-  bool get usedDepthNavigation => _navigationResult?.usedDepth ?? false;
 
   CameraInferenceController({ModelType initialModel = ModelType.Interior})
       : _selectedModel = initialModel,
@@ -252,64 +237,6 @@ class CameraInferenceController extends ChangeNotifier {
     );
   }
 
-  /// Handle combined streaming data from the native detector, including raw frames.
-  void onStreamingData(Map<String, dynamic> data) {
-    if (_isDisposed) return;
-
-    final imageBytes = _extractImageBytes(data['originalImage']);
-    img.Image? decodedImage;
-    int? imageWidth;
-    int? imageHeight;
-
-    if (imageBytes != null && imageBytes.isNotEmpty) {
-      try {
-        decodedImage = img.decodeImage(imageBytes);
-        if (decodedImage != null) {
-          imageWidth = decodedImage.width;
-          imageHeight = decodedImage.height;
-        }
-      } catch (_) {
-        decodedImage = null;
-      }
-    }
-
-    final results = <YOLOResult>[];
-    final rawDetections = data['detections'];
-    if (rawDetections is Iterable) {
-      for (final entry in rawDetections) {
-        if (entry is Map) {
-          final detectionMap = <String, dynamic>{};
-          entry.forEach((key, value) {
-            detectionMap['$key'] = value;
-          });
-          if (imageWidth != null && imageHeight != null) {
-            detectionMap['imageWidth'] = imageWidth;
-            detectionMap['imageHeight'] = imageHeight;
-          }
-          try {
-            results.add(YOLOResult.fromMap(detectionMap));
-          } catch (error) {
-            debugPrint('DepthNavigation: failed to parse detection: $error');
-          }
-        }
-      }
-    }
-
-    onDetectionResults(results);
-
-    final fpsValue = data['fps'];
-    if (fpsValue is num) {
-      onPerformanceMetrics(fpsValue.toDouble());
-    }
-
-    if (results.isEmpty || imageBytes == null || imageBytes.isEmpty || decodedImage == null) {
-      _clearNavigation();
-      return;
-    }
-
-    _scheduleDepthNavigation(results, imageBytes, decodedImage);
-  }
-
   /// Handle performance metrics
   void onPerformanceMetrics(double fps) {
     if (_isDisposed) return;
@@ -406,112 +333,6 @@ class CameraInferenceController extends ChangeNotifier {
         'DistanceEstimator: clase=$label bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)} distanceM=${distance?.toStringAsFixed(2) ?? 'null'}.',
       );
     }
-  }
-
-  Future<void> _updateDepthNavigation({
-    required List<YOLOResult> results,
-    required Uint8List imageBytes,
-    required img.Image decodedImage,
-  }) async {
-    if (results.isEmpty) {
-      _clearNavigation();
-      return;
-    }
-
-    final navigation = await _depthNavigationService.processDetections(
-      detections: results,
-      imageBytes: imageBytes,
-      decodedImage: decodedImage,
-    );
-
-    if (_isDisposed) return;
-
-    if (navigation == null) {
-      _clearNavigation();
-      return;
-    }
-
-    final previous = _navigationResult;
-    final changed = previous == null ||
-        previous.instruction != navigation.instruction ||
-        previous.usedDepth != navigation.usedDepth ||
-        !_sameNavigationObstacles(previous.obstacles, navigation.obstacles);
-
-    _navigationResult = navigation;
-    if (changed) {
-      notifyListeners();
-    }
-  }
-
-  void _scheduleDepthNavigation(
-    List<YOLOResult> results,
-    Uint8List imageBytes,
-    img.Image decodedImage,
-  ) {
-    if (_isDisposed || _isDepthProcessing) return;
-    _isDepthProcessing = true;
-    unawaited(() async {
-      try {
-        await _updateDepthNavigation(
-          results: results,
-          imageBytes: imageBytes,
-          decodedImage: decodedImage,
-        );
-      } catch (error, stackTrace) {
-        debugPrint('DepthNavigation: error processing frame: $error');
-        debugPrint('$stackTrace');
-      } finally {
-        _isDepthProcessing = false;
-      }
-    }());
-  }
-
-  void _clearNavigation() {
-    if (_navigationResult != null) {
-      _navigationResult = null;
-      notifyListeners();
-    }
-  }
-
-  Uint8List? _extractImageBytes(dynamic value) {
-    if (value is Uint8List) {
-      return value;
-    }
-    if (value is List<int>) {
-      return Uint8List.fromList(value);
-    }
-    return null;
-  }
-
-  bool _sameNavigationObstacles(
-    List<NavigationObstacle> a,
-    List<NavigationObstacle> b,
-  ) {
-    if (identical(a, b)) return true;
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      final left = a[i];
-      final right = b[i];
-      if (left.label != right.label || left.sector != right.sector) {
-        return false;
-      }
-      final leftDistance = left.distanceMeters;
-      final rightDistance = right.distanceMeters;
-      final leftHasDistance = leftDistance != null;
-      final rightHasDistance = rightDistance != null;
-      if (leftHasDistance != rightHasDistance) {
-        return false;
-      }
-      if (leftHasDistance && rightHasDistance) {
-        if ((leftDistance! - rightDistance!).abs() > 0.05) {
-          return false;
-        }
-      }
-      if (left.isApproximate != right.isApproximate) {
-        return false;
-      }
-    }
-    return true;
   }
 
   void toggleSlider(SliderType type) {
@@ -1213,7 +1034,6 @@ class CameraInferenceController extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _voiceAnnouncer.dispose();
-    _depthNavigationService.dispose();
     _statusTimer?.cancel();
     unawaited(_voiceCommandService.dispose());
     _weatherService.dispose();

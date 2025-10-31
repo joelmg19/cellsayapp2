@@ -98,51 +98,6 @@ int? extractImageHeightPx(YOLOResult result) {
   return null;
 }
 
-int? extractImageWidthPx(YOLOResult result) {
-  final dynamic dynamicResult = result;
-  final candidates = <dynamic?>[
-    _tryValue(() => dynamicResult.imageWidth),
-    _tryValue(() => dynamicResult.imageWidthPx),
-    _tryValue(() => dynamicResult.sourceWidth),
-    _tryValue(() => dynamicResult.frameWidth),
-    _tryValue(() => dynamicResult.inputWidth),
-  ];
-
-  final map = _mapRepresentation(dynamicResult);
-  if (map != null) {
-    const keys = [
-      'imageWidth',
-      'image_width',
-      'imageWidthPx',
-      'inputWidth',
-      'input_width',
-      'imageShape',
-      'image_shape',
-      'inputShape',
-      'input_shape',
-      'originalSize',
-      'original_size',
-      'originalShape',
-      'original_shape',
-      'sourceWidth',
-      'frameWidth',
-    ];
-    for (final key in keys) {
-      candidates.add(map[key]);
-    }
-    final imageSize = map['imageSize'] ?? map['image_size'];
-    candidates.add(imageSize);
-  }
-
-  for (final candidate in candidates) {
-    final value = _dimensionCandidateToDouble(candidate, preferWidth: true);
-    if (value != null && value > 1) {
-      return value.round();
-    }
-  }
-  return null;
-}
-
 double? extractConfidence(YOLOResult result) {
   final dynamic dynamicResult = result;
   try {
@@ -201,43 +156,29 @@ dynamic _tryValue(dynamic Function() getter) {
   }
 }
 
-double? _dimensionCandidateToDouble(dynamic candidate, {bool preferWidth = false}) {
+double? _dimensionCandidateToDouble(dynamic candidate) {
   if (candidate == null) return null;
   if (candidate is num) return candidate.toDouble();
   if (candidate is String) return double.tryParse(candidate);
   if (candidate is List) {
     if (candidate.isEmpty) return null;
-    if (preferWidth && candidate.length > 1) {
-      final parsed = _dimensionCandidateToDouble(
-        candidate[1],
-        preferWidth: preferWidth,
-      );
-      if (parsed != null) return parsed;
-    }
     for (final value in candidate) {
-      final parsed = _dimensionCandidateToDouble(
-        value,
-        preferWidth: preferWidth,
-      );
+      final parsed = _dimensionCandidateToDouble(value);
       if (parsed != null) return parsed;
     }
     return null;
   }
   if (candidate is Map) {
-    final keys = preferWidth ? ['width', 'w', 'cols'] : ['height', 'h', 'rows'];
-    for (final key in keys) {
-      final parsed = _dimensionCandidateToDouble(
-        candidate[key],
-        preferWidth: preferWidth,
-      );
+    for (final key in ['height', 'h', 'rows']) {
+      final parsed = _dimensionCandidateToDouble(candidate[key]);
       if (parsed != null) return parsed;
     }
   }
   if (candidate is Size) {
-    return preferWidth ? candidate.width : candidate.height;
+    return candidate.height;
   }
   if (candidate is Rect) {
-    return preferWidth ? candidate.width : candidate.height;
+    return candidate.height;
   }
   return null;
 }
