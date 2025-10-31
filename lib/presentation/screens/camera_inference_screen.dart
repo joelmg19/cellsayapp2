@@ -21,6 +21,8 @@ class CameraInferenceScreen extends StatefulWidget {
   const CameraInferenceScreen({
     super.key,
     this.modelType = ModelType.Interior,
+    this.showDepthControls = false,
+    this.enableDepthProcessing = false,
   });
 
   final ModelType modelType;

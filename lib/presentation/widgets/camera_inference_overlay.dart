@@ -38,6 +38,12 @@ class CameraInferenceOverlay extends StatelessWidget {
       _buildThresholdPills(),
     ];
 
+    if (showDepthControls) {
+      children
+        ..add(const SizedBox(height: 12))
+        ..add(DepthControlSection(controller: controller));
+    }
+
     return Positioned(
       top: MediaQuery.of(context).padding.top + (isLandscape ? 8 : 16),
       left: isLandscape ? 8 : 16,
