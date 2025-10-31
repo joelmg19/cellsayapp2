@@ -1,25 +1,8 @@
-
 package com.ultralytics.yolo_example
 
-<<<<<<< HEAD
-import android.Manifest
-import android.content.pm.PackageManager
 import android.graphics.RectF
 import android.os.Bundle
 import android.widget.FrameLayout
-import android.widget.Toast
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import com.google.ar.core.ArCoreApk
-import com.google.ar.core.Config
-import com.google.ar.core.Frame
-import com.google.ar.core.Session
-import com.google.ar.core.exceptions.CameraNotAvailableException
-import com.google.ar.core.exceptions.UnavailableApkTooOldException
-import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException
-import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
-import com.google.ar.core.exceptions.UnavailableSdkTooOldException
-import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -31,10 +14,6 @@ class MainActivity : FlutterActivity() {
     private val ttsHelper: TtsHelper by lazy { TtsHelper(this) }
     private val overlayView: DetectionOverlayView by lazy { DetectionOverlayView(this) }
 
-    private var session: Session? = null
-    private var sessionResumed = false
-    private var installRequested = false
-    private var depthSupported = false
     private var lastInstruction: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,27 +25,13 @@ class MainActivity : FlutterActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-=======
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodChannel
-
-class MainActivity : FlutterActivity() {
-    private val voiceCommandManager: VoiceCommandManager by lazy {
-        VoiceCommandManager(this)
->>>>>>> 9d889bb (mensaje)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
-<<<<<<< HEAD
         MethodChannel(messenger, VOICE_CHANNEL).setMethodCallHandler { call, result ->
-=======
-        MethodChannel(messenger, "voice_commands/methods").setMethodCallHandler { call, result ->
->>>>>>> 9d889bb (mensaje)
             when (call.method) {
                 "initialize" -> voiceCommandManager.initialize(result)
                 "start" -> {
@@ -87,7 +52,6 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-<<<<<<< HEAD
         MethodChannel(messenger, NAVIGATION_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "processDetections" -> handleNavigationCall(call, result)
@@ -98,60 +62,19 @@ class MainActivity : FlutterActivity() {
         EventChannel(messenger, VOICE_EVENTS_CHANNEL).setStreamHandler(voiceCommandManager)
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (hasCameraPermission()) {
-            resumeSessionIfNeeded()
-        } else {
-            requestCameraPermission()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        overlayView.clear()
-        resetDepthCache()
-        session?.let {
-            try {
-                it.pause()
-            } catch (_: Exception) {
-                // Ignore pause issues.
-            }
-        }
-        sessionResumed = false
-=======
-        EventChannel(messenger, "voice_commands/events")
-            .setStreamHandler(voiceCommandManager)
->>>>>>> 9d889bb (mensaje)
-    }
-
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-<<<<<<< HEAD
-        if (requestCode == CAMERA_PERMISSION_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                resumeSessionIfNeeded()
-            } else {
-                showToast("Se requiere la cámara para la navegación por profundidad.")
-            }
-        }
-=======
->>>>>>> 9d889bb (mensaje)
         voiceCommandManager.handlePermissionResult(requestCode, permissions, grantResults)
     }
 
     override fun onDestroy() {
-<<<<<<< HEAD
         overlayView.clear()
         voiceCommandManager.dispose()
         ttsHelper.shutdown()
-        session?.close()
-        session = null
-        resetDepthCache()
         super.onDestroy()
     }
 
@@ -177,18 +100,9 @@ class MainActivity : FlutterActivity() {
             overlayView.updateDetections(detections)
         }
 
-        resumeSessionIfNeeded()
-        val frame = obtainFrame()
-        val depthActive = depthSupported && frame != null
-
         val obstacles = detections.map { det ->
-            val distance = frame?.let { distanceMetersForBox(it, det, viewWidth, viewHeight) }
-            val approximate = if (distance != null) {
-                false
-            } else {
-                approximateClose(det, viewWidth, viewHeight)
-            }
-            Obstacle(det.label, sectorOf(det.boxViewPx, viewWidth), distance, approximate)
+            val approximate = approximateClose(det, viewWidth, viewHeight)
+            Obstacle(det.label, sectorOf(det.boxViewPx, viewWidth), null, approximate)
         }
 
         val instruction = decideInstruction(obstacles)
@@ -208,7 +122,7 @@ class MainActivity : FlutterActivity() {
                         "approximate" to it.isApproximate,
                     )
                 },
-                "usedDepth" to depthActive,
+                "usedDepth" to false,
             ),
         )
     }
@@ -263,99 +177,6 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun obtainFrame(): Frame? {
-        if (!depthSupported || !sessionResumed) return null
-        val currentSession = session ?: return null
-        return try {
-            currentSession.update()
-        } catch (error: CameraNotAvailableException) {
-            showToast("La cámara no está disponible para ARCore.")
-            sessionResumed = false
-            session = null
-            resetDepthCache()
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun resumeSessionIfNeeded() {
-        val currentSession = ensureSession() ?: return
-        if (sessionResumed) return
-        try {
-            currentSession.resume()
-            sessionResumed = true
-        } catch (error: CameraNotAvailableException) {
-            showToast("La cámara no está disponible para ARCore.")
-            session = null
-            sessionResumed = false
-        }
-    }
-
-    private fun ensureSession(): Session? {
-        if (!hasCameraPermission()) return null
-        session?.let { return it }
-
-        val activity = this
-        try {
-            when (ArCoreApk.getInstance().requestInstall(activity, !installRequested)) {
-                ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
-                    installRequested = true
-                    return null
-                }
-                ArCoreApk.InstallStatus.INSTALLED -> installRequested = false
-            }
-        } catch (error: UnavailableUserDeclinedInstallationException) {
-            showToast("Se requiere Google Play Services for AR.")
-            return null
-        } catch (error: UnavailableArcoreNotInstalledException) {
-            showToast("Instala Google Play Services for AR para continuar.")
-            return null
-        }
-
-        return try {
-            val newSession = Session(activity)
-            val config = Config(newSession)
-            depthSupported = newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
-            if (!depthSupported) {
-                showToast("Profundidad automática no soportada, usando estimación aproximada.")
-            }
-            config.depthMode = if (depthSupported) {
-                Config.DepthMode.AUTOMATIC
-            } else {
-                Config.DepthMode.DISABLED
-            }
-            newSession.configure(config)
-            session = newSession
-            newSession
-        } catch (error: UnavailableDeviceNotCompatibleException) {
-            showToast("Este dispositivo no es compatible con ARCore.")
-            null
-        } catch (error: UnavailableApkTooOldException) {
-            showToast("Actualiza Google Play Services for AR.")
-            null
-        } catch (error: UnavailableSdkTooOldException) {
-            showToast("Actualiza la aplicación para usar ARCore.")
-            null
-        } catch (error: Exception) {
-            showToast("No se pudo crear la sesión de AR: ${error.localizedMessage}")
-            null
-        }
-    }
-
-    private fun hasCameraPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun requestCameraPermission() {
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(Manifest.permission.CAMERA),
-            CAMERA_PERMISSION_CODE,
-        )
-    }
-
     private fun approximateClose(det: Det, viewWidth: Int, viewHeight: Int): Boolean {
         val area = det.boxViewPx.width() * det.boxViewPx.height()
         val totalArea = viewWidth.toFloat() * viewHeight.toFloat()
@@ -366,27 +187,11 @@ class MainActivity : FlutterActivity() {
         return ratio >= 0.08f && bottom > viewHeight * 0.75f
     }
 
-    private fun showToast(message: String) {
-        runOnUiThread {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-        }
-    }
-
     companion object {
         private const val DEFAULT_LISTEN_FOR = 8000L
         private const val DEFAULT_PAUSE_FOR = 3000L
-        private const val CAMERA_PERMISSION_CODE = 0xAC2
         private const val VOICE_CHANNEL = "voice_commands/methods"
         private const val VOICE_EVENTS_CHANNEL = "voice_commands/events"
         private const val NAVIGATION_CHANNEL = "navigation/depth"
-=======
-        voiceCommandManager.dispose()
-        super.onDestroy()
-    }
-
-    companion object {
-        private const val DEFAULT_LISTEN_FOR = 8000L
-        private const val DEFAULT_PAUSE_FOR = 3000L
->>>>>>> 9d889bb (mensaje)
     }
 }

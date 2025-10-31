@@ -1,14 +1,7 @@
 package com.ultralytics.yolo_example
 
 import android.graphics.RectF
-import com.google.ar.core.Frame
-import com.google.ar.core.TrackingState
-import com.google.ar.core.exceptions.NotYetAvailableException
-import java.nio.ByteOrder
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /** Representation of a detection after non-maximum suppression. */
 data class Det(
@@ -47,66 +40,6 @@ fun sectorOf(box: RectF, viewW: Int): Sector {
         centerX < third -> Sector.L
         centerX > 2f * third -> Sector.R
         else -> Sector.C
-    }
-}
-
-/**
- * Estimate the distance in meters for a detection by sampling the ARCore depth map.
- */
-fun distanceMetersForBox(
-    frame: Frame,
-    det: Det,
-    viewW: Int,
-    viewH: Int,
-    stride: Int = 4,
-): Float? {
-    if (viewW <= 0 || viewH <= 0) return null
-    if (frame.camera.trackingState != TrackingState.TRACKING) return null
-
-    val depthPlane = DepthImageCache.ensure(frame) ?: return null
-
-    val rect = RectF(
-        max(0f, det.boxViewPx.left),
-        max(0f, det.boxViewPx.top),
-        min(viewW.toFloat(), det.boxViewPx.right),
-        min(viewH.toFloat(), det.boxViewPx.bottom),
-    )
-    if (rect.isEmpty) return null
-
-    val samplingStride = if (stride <= 0) 1 else stride
-    val samples = mutableListOf<Float>()
-
-    val depthWidth = depthPlane.width
-    val depthHeight = depthPlane.height
-    val data = depthPlane.data
-
-    var y = rect.top
-    while (y <= rect.bottom) {
-        var x = rect.left
-        while (x <= rect.right) {
-            val normalizedX = x / viewW.toFloat()
-            val normalizedY = y / viewH.toFloat()
-            val depthX = (normalizedX * depthWidth).roundToInt()
-            val depthY = (normalizedY * depthHeight).roundToInt()
-            if (depthX in 0 until depthWidth && depthY in 0 until depthHeight) {
-                val index = depthY * depthWidth + depthX
-                val depthMillimeters = data[index].toInt() and 0xFFFF
-                if (depthMillimeters > 0) {
-                    samples.add(depthMillimeters / 1000f)
-                }
-            }
-            x += samplingStride.toFloat()
-        }
-        y += samplingStride.toFloat()
-    }
-
-    if (samples.isEmpty()) return null
-    samples.sort()
-    val middle = samples.size / 2
-    return if (samples.size % 2 == 1) {
-        samples[middle]
-    } else {
-        (samples[middle - 1] + samples[middle]) / 2f
     }
 }
 
@@ -149,71 +82,4 @@ fun decideInstruction(obsts: List<Obstacle>, safeM: Float = 1.2f): String {
     }
 
     return "Sigue derecho"
-}
-
-/** Clear cached depth data when pausing the AR session. */
-fun resetDepthCache() {
-    DepthImageCache.clear()
-}
-
-private data class DepthPlane(
-    val width: Int,
-    val height: Int,
-    val data: ShortArray,
-)
-
-private object DepthImageCache {
-    @Volatile
-    private var timestamp: Long = -1L
-    @Volatile
-    private var width: Int = 0
-    @Volatile
-    private var height: Int = 0
-    @Volatile
-    private var data: ShortArray? = null
-
-    @Synchronized
-    fun ensure(frame: Frame): DepthPlane? {
-        val currentTimestamp = frame.timestamp
-        if (currentTimestamp == 0L) return null
-        if (timestamp != currentTimestamp || data == null) {
-            try {
-                frame.acquireDepthImage16Bits().use { image ->
-                    val plane = image.planes.firstOrNull() ?: return null
-                    val buffer = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.rewind()
-                    val depthWidth = image.width
-                    val depthHeight = image.height
-                    val rowStride = plane.rowStride
-                    val pixelStride = plane.pixelStride
-                    val depthData = ShortArray(depthWidth * depthHeight)
-                    for (y in 0 until depthHeight) {
-                        for (x in 0 until depthWidth) {
-                            val bufferIndex = y * rowStride + x * pixelStride
-                            val depthMillimeters = buffer.getShort(bufferIndex).toInt() and 0xFFFF
-                            depthData[y * depthWidth + x] = depthMillimeters.toShort()
-                        }
-                    }
-                    timestamp = currentTimestamp
-                    width = depthWidth
-                    height = depthHeight
-                    data = depthData
-                }
-            } catch (_: NotYetAvailableException) {
-                return null
-            } catch (_: IllegalStateException) {
-                return null
-            }
-        }
-        val depthData = data ?: return null
-        return DepthPlane(width, height, depthData)
-    }
-
-    @Synchronized
-    fun clear() {
-        timestamp = -1L
-        width = 0
-        height = 0
-        data = null
-    }
 }
