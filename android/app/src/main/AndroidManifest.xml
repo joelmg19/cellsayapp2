@@ -6,12 +6,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
-<<<<<<< HEAD
     <uses-feature
         android:name="android.hardware.camera.ar"
         android:required="false" />
-=======
->>>>>>> 9d889bb (mensaje)
     <!-- Microphone permission for voice commands -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -46,12 +43,9 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-<<<<<<< HEAD
         <meta-data
             android:name="com.google.ar.core"
             android:value="optional" />
-=======
->>>>>>> 9d889bb (mensaje)
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
