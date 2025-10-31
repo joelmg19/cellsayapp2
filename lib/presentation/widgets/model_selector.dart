@@ -1,7 +1,6 @@
 
 import 'package:flutter/material.dart';
 import '../../models/models.dart';
-import 'depth_control_section.dart';
 
 /// A widget for selecting different YOLO model types
 class ModelSelector extends StatelessWidget {
@@ -10,18 +9,12 @@ class ModelSelector extends StatelessWidget {
     required this.selectedModel,
     required this.isModelLoading,
     required this.onModelChanged,
-    required this.isDepthEnabled,
-    required this.isDepthAvailable,
-    required this.onDepthChanged,
     this.textScaleFactor = 1.0,
   });
 
   final ModelType selectedModel;
   final bool isModelLoading;
   final ValueChanged<ModelType> onModelChanged;
-  final bool isDepthEnabled;
-  final bool isDepthAvailable;
-  final ValueChanged<bool> onDepthChanged;
   final double textScaleFactor;
 
   @override
@@ -30,13 +23,6 @@ class ModelSelector extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        DepthControlSection(
-          isEnabled: isDepthEnabled,
-          isAvailable: isDepthAvailable,
-          onChanged: onDepthChanged,
-          textScaleFactor: textScaleFactor,
-        ),
-        SizedBox(height: 8 * textScaleFactor),
         Container(
           height: 36,
           padding: const EdgeInsets.all(2),

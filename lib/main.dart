@@ -32,6 +32,15 @@ class MyApp extends StatelessWidget {
             settings: settings,
           );
         }
+        if (settings.name == '/depth') {
+          return MaterialPageRoute(
+            builder: (_) => const CameraInferenceScreen(
+              showDepthControls: true,
+              enableDepthProcessing: true,
+            ),
+            settings: settings,
+          );
+        }
         if (settings.name == '/single-image') {
           return MaterialPageRoute(
             builder: (_) => const SingleImageScreen(),

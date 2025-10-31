@@ -18,9 +18,16 @@ import '../widgets/voice_settings_sheet.dart';
 /// - Performance metrics (FPS)
 class CameraInferenceScreen extends StatefulWidget {
   // CORRECCIÓN CLAVE: Cambiar 'initialModel' por 'modelType'
-  const CameraInferenceScreen({super.key, this.modelType = ModelType.Interior});
+  const CameraInferenceScreen({
+    super.key,
+    this.modelType = ModelType.Interior,
+    this.showDepthControls = false,
+    this.enableDepthProcessing = false,
+  });
 
   final ModelType modelType;
+  final bool showDepthControls;
+  final bool enableDepthProcessing;
 
   @override
   State<CameraInferenceScreen> createState() => _CameraInferenceScreenState();
@@ -39,6 +46,13 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
         _showError('Model Loading Error', error.toString());
       }
     });
+    if (widget.enableDepthProcessing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _controller.setDepthProcessingEnabled(true);
+        }
+      });
+    }
   }
 
   @override
@@ -62,6 +76,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
               CameraInferenceOverlay(
                 controller: _controller,
                 isLandscape: isLandscape,
+                showDepthControls: widget.showDepthControls,
               ),
               CameraControls(
                 currentZoomLevel: _controller.currentZoomLevel,
