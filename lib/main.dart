@@ -7,6 +7,8 @@ import 'package:ultralytics_yolo_example/presentation/screens/money_detector_scr
 import 'package:ultralytics_yolo_example/presentation/screens/single_image_screen.dart';
 import 'package:ultralytics_yolo_example/presentation/screens/text_reader_screen.dart';
 
+import 'package:ultralytics_yolo_example/presentation/screens/depth_camera_screen.dart';
+
 void main() {
   runApp(const MyApp());
 }
@@ -34,10 +36,7 @@ class MyApp extends StatelessWidget {
         }
         if (settings.name == '/depth') {
           return MaterialPageRoute(
-            builder: (_) => const CameraInferenceScreen(
-              showDepthControls: true,
-              enableDepthProcessing: true,
-            ),
+            builder: (_) => const DepthCameraScreen(),
             settings: settings,
           );
         }

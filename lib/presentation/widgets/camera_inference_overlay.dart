@@ -38,18 +38,6 @@ class CameraInferenceOverlay extends StatelessWidget {
       _buildThresholdPills(),
     ];
 
-    if (showDepthControls) {
-      children.insertAll(0, [
-        DepthControlSection(
-          isEnabled: controller.isDepthProcessingEnabled,
-          isAvailable: controller.isDepthServiceAvailable,
-          onChanged: controller.setDepthProcessingEnabled,
-          textScaleFactor: controller.fontScale,
-        ),
-        SizedBox(height: isLandscape ? 8 : 12),
-      ]);
-    }
-
     return Positioned(
       top: MediaQuery.of(context).padding.top + (isLandscape ? 8 : 16),
       left: isLandscape ? 8 : 16,
