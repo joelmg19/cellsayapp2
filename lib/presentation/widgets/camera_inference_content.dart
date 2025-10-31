@@ -19,10 +19,14 @@ class CameraInferenceContent extends StatelessWidget {
         controller: controller.yoloController,
         modelPath: controller.modelPath!,
         task: controller.selectedModel.task,
-        streamingConfig: const YOLOStreamingConfig.minimal(),
-        onResult: controller.onDetectionResults,
-        onPerformanceMetrics: (metrics) =>
-            controller.onPerformanceMetrics(metrics.fps),
+        streamingConfig: const YOLOStreamingConfig.custom(
+          includeOriginalImage: true,
+          includeDetections: true,
+          includeClassifications: true,
+          includeProcessingTimeMs: true,
+          includeFps: true,
+        ),
+        onStreamingData: controller.handleStreamingData,
         onZoomChanged: controller.onZoomChanged,
       );
     } else if (controller.isModelLoading) {

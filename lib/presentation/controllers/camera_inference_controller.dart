@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -13,6 +14,7 @@ import '../../models/detection_insight.dart';
 import '../../models/models.dart';
 import '../../models/voice_settings.dart';
 import '../../services/detection_post_processor.dart';
+import '../../services/depth_inference_service.dart';
 import '../../services/model_manager.dart';
 import '../../services/voice_announcer.dart';
 import '../../services/voice_command_service.dart';
@@ -67,6 +69,8 @@ class CameraInferenceController extends ChangeNotifier {
   DistanceEstimatorProvider();
   DistanceEstimator? _distanceEstimator;
   bool _loggedMissingDistanceEstimator = false;
+  DepthInferenceService? _depthService;
+  DepthFrame? _latestDepthFrame;
 
   // Performance optimization
   bool _isDisposed = false;
@@ -128,6 +132,7 @@ class CameraInferenceController extends ChangeNotifier {
         Timer.periodic(const Duration(seconds: 1), (_) => _onStatusTick());
     unawaited(_refreshWeather());
     unawaited(_loadDistanceEstimator());
+    unawaited(_initializeDepthService());
     _yoloController.setThresholds(
       confidenceThreshold: _confidenceThreshold,
       iouThreshold: _iouThreshold,
@@ -257,14 +262,67 @@ class CameraInferenceController extends ChangeNotifier {
     }
   }
 
+  void handleStreamingData(Map<String, dynamic> data) {
+    if (_isDisposed) return;
+    unawaited(_processStreamingData(data));
+  }
+
+  Future<void> _processStreamingData(Map<String, dynamic> data) async {
+    if (_isDisposed) return;
+
+    final fpsValue = data['fps'];
+    if (fpsValue is num) {
+      onPerformanceMetrics(fpsValue.toDouble());
+    }
+
+    final detectionsData = data['detections'];
+    final results = <YOLOResult>[];
+    if (detectionsData is List) {
+      for (final detection in detectionsData) {
+        if (detection is Map) {
+          try {
+            results.add(YOLOResult.fromMap(detection));
+          } catch (error, stackTrace) {
+            debugPrint(
+              'CameraInferenceController: error parsing detection - $error',
+            );
+            debugPrint('$stackTrace');
+          }
+        }
+      }
+    }
+
+    Uint8List? originalImage;
+    final imageData = data['originalImage'];
+    if (imageData is Uint8List) {
+      originalImage = imageData;
+    }
+
+    if (originalImage != null && results.isNotEmpty) {
+      final depthService = _depthService;
+      if (depthService != null) {
+        final depthFrame = await depthService.estimateDepth(originalImage);
+        if (_isDisposed) return;
+        _latestDepthFrame = depthFrame;
+      } else {
+        _latestDepthFrame = null;
+      }
+    }
+
+    if (_isDisposed) return;
+    onDetectionResults(results);
+  }
+
   void _annotateDistances(List<YOLOResult> results) {
     if (results.isEmpty) return;
 
     final estimator = _distanceEstimator;
-    if (estimator == null) {
+    final depthFrame = _latestDepthFrame;
+
+    if (estimator == null && depthFrame == null) {
       if (!_loggedMissingDistanceEstimator) {
         debugPrint(
-          'DistanceEstimator: estimador no disponible, se omite el cálculo de distancias.',
+          'DistanceEstimator: estimador no disponible y sin mapa de profundidad, se omiten las distancias.',
         );
         _loggedMissingDistanceEstimator = true;
       }
@@ -276,63 +334,90 @@ class CameraInferenceController extends ChangeNotifier {
 
     for (final result in results) {
       final label = extractLabel(result).toLowerCase();
-      final rect = extractBoundingBox(result);
-      final imageHeight = extractImageHeightPx(result);
-
-      if (rect == null) {
-        debugPrint('DistanceEstimator: sin bounding box para $label.');
-        result.distanceM = null;
-        continue;
+      double? depthDistance;
+      if (depthFrame != null) {
+        depthDistance = depthFrame.estimateDistance(result.normalizedBox);
+        if (depthDistance != null) {
+          debugPrint(
+            'DepthInference: clase=$label depthDistance=${depthDistance.toStringAsFixed(2)}m',
+          );
+        }
       }
 
-      if (imageHeight == null || imageHeight <= 0) {
-        debugPrint('DistanceEstimator: sin altura de imagen para $label.');
-        result.distanceM = null;
-        continue;
+      double? geometricDistance;
+      if (estimator != null) {
+        geometricDistance = _estimateGeometricDistance(result, estimator, label);
       }
 
-      var bboxHeightRelative = rect.height;
-      if (bboxHeightRelative.isNaN || bboxHeightRelative.isInfinite ||
-          bboxHeightRelative <= 0) {
-        debugPrint('DistanceEstimator: altura inválida de bounding box para $label.');
-        result.distanceM = null;
-        continue;
-      }
+      result.distanceM = _combineDistanceEstimates(depthDistance, geometricDistance);
+    }
+  }
 
-      double bboxHeightPx;
-      if (bboxHeightRelative > 1.0) {
-        bboxHeightPx = bboxHeightRelative;
-        bboxHeightRelative = bboxHeightPx / imageHeight;
-      } else {
-        bboxHeightRelative = bboxHeightRelative.clamp(0.0, 1.0);
-        bboxHeightPx = bboxHeightRelative * imageHeight;
-      }
+  double? _combineDistanceEstimates(double? depth, double? geometric) {
+    if (depth != null && geometric != null) {
+      return (depth * 0.7) + (geometric * 0.3);
+    }
+    return depth ?? geometric;
+  }
 
-      if (bboxHeightPx <= 1) {
-        debugPrint(
-          'DistanceEstimator: bounding box muy pequeño para $label (bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)}).',
-        );
-        result.distanceM = null;
-        continue;
-      }
+  double? _estimateGeometricDistance(
+    YOLOResult result,
+    DistanceEstimator estimator,
+    String label,
+  ) {
+    final rect = extractBoundingBox(result);
+    final imageHeight = extractImageHeightPx(result);
 
-      final distance = estimator.distanceMeters(
-        detectedClass: label,
-        bboxHeightRelative: bboxHeightRelative,
-        imageHeightPx: imageHeight,
-      );
+    if (rect == null) {
+      debugPrint('DistanceEstimator: sin bounding box para $label.');
+      return null;
+    }
 
-      if (distance == null) {
-        debugPrint(
-          'DistanceEstimator: no se puede estimar distancia para $label (bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)}).',
-        );
-      }
+    if (imageHeight == null || imageHeight <= 0) {
+      debugPrint('DistanceEstimator: sin altura de imagen para $label.');
+      return null;
+    }
 
-      result.distanceM = distance;
+    var bboxHeightRelative = rect.height;
+    if (bboxHeightRelative.isNaN || bboxHeightRelative.isInfinite ||
+        bboxHeightRelative <= 0) {
+      debugPrint('DistanceEstimator: altura inválida de bounding box para $label.');
+      return null;
+    }
+
+    double bboxHeightPx;
+    if (bboxHeightRelative > 1.0) {
+      bboxHeightPx = bboxHeightRelative;
+      bboxHeightRelative = bboxHeightPx / imageHeight;
+    } else {
+      bboxHeightRelative = bboxHeightRelative.clamp(0.0, 1.0);
+      bboxHeightPx = bboxHeightRelative * imageHeight;
+    }
+
+    if (bboxHeightPx <= 1) {
       debugPrint(
-        'DistanceEstimator: clase=$label bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)} distanceM=${distance?.toStringAsFixed(2) ?? 'null'}.',
+        'DistanceEstimator: bounding box muy pequeño para $label (bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)}).',
+      );
+      return null;
+    }
+
+    final distance = estimator.distanceMeters(
+      detectedClass: label,
+      bboxHeightRelative: bboxHeightRelative,
+      imageHeightPx: imageHeight,
+    );
+
+    if (distance == null) {
+      debugPrint(
+        'DistanceEstimator: no se puede estimar distancia para $label (bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)}).',
+      );
+    } else {
+      debugPrint(
+        'DistanceEstimator: clase=$label bboxHeightPx=${bboxHeightPx.toStringAsFixed(2)} distanceM=${distance.toStringAsFixed(2)}.',
       );
     }
+
+    return distance;
   }
 
   void toggleSlider(SliderType type) {
@@ -1010,6 +1095,22 @@ class CameraInferenceController extends ChangeNotifier {
     }
   }
 
+  Future<void> _initializeDepthService() async {
+    try {
+      final service = DepthInferenceService(sampleStep: 3);
+      await service.initialize();
+      if (_isDisposed) {
+        await service.dispose();
+        return;
+      }
+      _depthService = service;
+    } catch (error, stackTrace) {
+      if (_isDisposed) return;
+      debugPrint('DepthInferenceService: error al inicializar - $error');
+      debugPrint('$stackTrace');
+    }
+  }
+
   Future<void> _announceSystemMessage(
       String message, {
         bool force = false,
@@ -1037,6 +1138,9 @@ class CameraInferenceController extends ChangeNotifier {
     _statusTimer?.cancel();
     unawaited(_voiceCommandService.dispose());
     _weatherService.dispose();
+    unawaited(_depthService?.dispose());
+    _depthService = null;
+    _latestDepthFrame = null;
     super.dispose();
   }
 }
