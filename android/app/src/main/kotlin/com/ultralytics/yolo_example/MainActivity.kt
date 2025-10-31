@@ -1,7 +1,5 @@
-
 package com.ultralytics.yolo_example
 
-<<<<<<< HEAD
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.RectF
@@ -30,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private val voiceCommandManager: VoiceCommandManager by lazy { VoiceCommandManager(this) }
     private val ttsHelper: TtsHelper by lazy { TtsHelper(this) }
     private val overlayView: DetectionOverlayView by lazy { DetectionOverlayView(this) }
+    private val depthProcessor: DepthAnythingProcessor by lazy { DepthAnythingProcessor(this) }
 
     private var session: Session? = null
     private var sessionResumed = false
@@ -46,27 +45,13 @@ class MainActivity : FlutterActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-=======
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodChannel
-
-class MainActivity : FlutterActivity() {
-    private val voiceCommandManager: VoiceCommandManager by lazy {
-        VoiceCommandManager(this)
->>>>>>> 9d889bb (mensaje)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
-<<<<<<< HEAD
         MethodChannel(messenger, VOICE_CHANNEL).setMethodCallHandler { call, result ->
-=======
-        MethodChannel(messenger, "voice_commands/methods").setMethodCallHandler { call, result ->
->>>>>>> 9d889bb (mensaje)
             when (call.method) {
                 "initialize" -> voiceCommandManager.initialize(result)
                 "start" -> {
@@ -87,7 +72,6 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-<<<<<<< HEAD
         MethodChannel(messenger, NAVIGATION_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "processDetections" -> handleNavigationCall(call, result)
@@ -95,7 +79,8 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        EventChannel(messenger, VOICE_EVENTS_CHANNEL).setStreamHandler(voiceCommandManager)
+        EventChannel(messenger, VOICE_EVENTS_CHANNEL)
+            .setStreamHandler(voiceCommandManager)
     }
 
     override fun onResume() {
@@ -111,18 +96,14 @@ class MainActivity : FlutterActivity() {
         super.onPause()
         overlayView.clear()
         resetDepthCache()
+        depthProcessor.clear()
         session?.let {
             try {
                 it.pause()
             } catch (_: Exception) {
-                // Ignore pause issues.
             }
         }
         sessionResumed = false
-=======
-        EventChannel(messenger, "voice_commands/events")
-            .setStreamHandler(voiceCommandManager)
->>>>>>> 9d889bb (mensaje)
     }
 
     override fun onRequestPermissionsResult(
@@ -131,7 +112,6 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-<<<<<<< HEAD
         if (requestCode == CAMERA_PERMISSION_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 resumeSessionIfNeeded()
@@ -139,19 +119,17 @@ class MainActivity : FlutterActivity() {
                 showToast("Se requiere la cámara para la navegación por profundidad.")
             }
         }
-=======
->>>>>>> 9d889bb (mensaje)
         voiceCommandManager.handlePermissionResult(requestCode, permissions, grantResults)
     }
 
     override fun onDestroy() {
-<<<<<<< HEAD
         overlayView.clear()
         voiceCommandManager.dispose()
         ttsHelper.shutdown()
         session?.close()
         session = null
         resetDepthCache()
+        depthProcessor.clear()
         super.onDestroy()
     }
 
@@ -179,10 +157,17 @@ class MainActivity : FlutterActivity() {
 
         resumeSessionIfNeeded()
         val frame = obtainFrame()
-        val depthActive = depthSupported && frame != null
+        val depthFromArCore = depthSupported && frame != null
+        val depthMap = frame?.let { depthProcessor.estimate(it) }
 
         val obstacles = detections.map { det ->
-            val distance = frame?.let { distanceMetersForBox(it, det, viewWidth, viewHeight) }
+            val distanceFromAr = frame?.let { distanceMetersForBox(it, det, viewWidth, viewHeight) }
+            val distanceFromModel = if (distanceFromAr == null) {
+                depthMap?.metersForBox(det, viewWidth, viewHeight)
+            } else {
+                null
+            }
+            val distance = distanceFromAr ?: distanceFromModel
             val approximate = if (distance != null) {
                 false
             } else {
@@ -208,7 +193,7 @@ class MainActivity : FlutterActivity() {
                         "approximate" to it.isApproximate,
                     )
                 },
-                "usedDepth" to depthActive,
+                "usedDepth" to (depthFromArCore || depthMap != null),
             ),
         )
     }
@@ -379,14 +364,5 @@ class MainActivity : FlutterActivity() {
         private const val VOICE_CHANNEL = "voice_commands/methods"
         private const val VOICE_EVENTS_CHANNEL = "voice_commands/events"
         private const val NAVIGATION_CHANNEL = "navigation/depth"
-=======
-        voiceCommandManager.dispose()
-        super.onDestroy()
-    }
-
-    companion object {
-        private const val DEFAULT_LISTEN_FOR = 8000L
-        private const val DEFAULT_PAUSE_FOR = 3000L
->>>>>>> 9d889bb (mensaje)
     }
 }
