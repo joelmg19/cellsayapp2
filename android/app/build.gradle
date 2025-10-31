@@ -50,6 +50,4 @@ flutter {
 }
 
 dependencies {
-    implementation "com.google.ar:core:1.45.0"
-    implementation "org.tensorflow:tensorflow-lite:2.14.0"
 }

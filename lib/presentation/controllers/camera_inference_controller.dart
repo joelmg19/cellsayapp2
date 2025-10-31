@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:image/image.dart' as img;
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
@@ -71,6 +73,7 @@ class CameraInferenceController extends ChangeNotifier {
   DistanceEstimator? _distanceEstimator;
   bool _loggedMissingDistanceEstimator = false;
   DepthNavigationResult? _navigationResult;
+  bool _isDepthProcessing = false;
 
   // Performance optimization
   bool _isDisposed = false;
@@ -200,8 +203,6 @@ class CameraInferenceController extends ChangeNotifier {
     final filtered = processed.filteredResults;
     final filteredCount = filtered.length;
 
-    unawaited(_updateDepthNavigation(filtered));
-
     bool shouldNotify = false;
 
     if (_detectionCount != filteredCount) {
@@ -249,6 +250,64 @@ class CameraInferenceController extends ChangeNotifier {
         alerts: _safetyAlerts,
       ),
     );
+  }
+
+  /// Handle combined streaming data from the native detector, including raw frames.
+  void onStreamingData(Map<String, dynamic> data) {
+    if (_isDisposed) return;
+
+    final imageBytes = _extractImageBytes(data['originalImage']);
+    img.Image? decodedImage;
+    int? imageWidth;
+    int? imageHeight;
+
+    if (imageBytes != null && imageBytes.isNotEmpty) {
+      try {
+        decodedImage = img.decodeImage(imageBytes);
+        if (decodedImage != null) {
+          imageWidth = decodedImage.width;
+          imageHeight = decodedImage.height;
+        }
+      } catch (_) {
+        decodedImage = null;
+      }
+    }
+
+    final results = <YOLOResult>[];
+    final rawDetections = data['detections'];
+    if (rawDetections is Iterable) {
+      for (final entry in rawDetections) {
+        if (entry is Map) {
+          final detectionMap = <String, dynamic>{};
+          entry.forEach((key, value) {
+            detectionMap['$key'] = value;
+          });
+          if (imageWidth != null && imageHeight != null) {
+            detectionMap['imageWidth'] = imageWidth;
+            detectionMap['imageHeight'] = imageHeight;
+          }
+          try {
+            results.add(YOLOResult.fromMap(detectionMap));
+          } catch (error) {
+            debugPrint('DepthNavigation: failed to parse detection: $error');
+          }
+        }
+      }
+    }
+
+    onDetectionResults(results);
+
+    final fpsValue = data['fps'];
+    if (fpsValue is num) {
+      onPerformanceMetrics(fpsValue.toDouble());
+    }
+
+    if (results.isEmpty || imageBytes == null || imageBytes.isEmpty || decodedImage == null) {
+      _clearNavigation();
+      return;
+    }
+
+    _scheduleDepthNavigation(results, imageBytes, decodedImage);
   }
 
   /// Handle performance metrics
@@ -349,38 +408,26 @@ class CameraInferenceController extends ChangeNotifier {
     }
   }
 
-  Future<void> _updateDepthNavigation(List<YOLOResult> results) async {
+  Future<void> _updateDepthNavigation({
+    required List<YOLOResult> results,
+    required Uint8List imageBytes,
+    required img.Image decodedImage,
+  }) async {
     if (results.isEmpty) {
-      if (_navigationResult != null) {
-        _navigationResult = null;
-        notifyListeners();
-      }
-      return;
-    }
-
-    final width = extractImageWidthPx(results.first);
-    final height = extractImageHeightPx(results.first);
-    if (width == null || height == null) {
-      if (_navigationResult != null) {
-        _navigationResult = null;
-        notifyListeners();
-      }
+      _clearNavigation();
       return;
     }
 
     final navigation = await _depthNavigationService.processDetections(
       detections: results,
-      imageWidth: width,
-      imageHeight: height,
+      imageBytes: imageBytes,
+      decodedImage: decodedImage,
     );
 
     if (_isDisposed) return;
 
     if (navigation == null) {
-      if (_navigationResult != null) {
-        _navigationResult = null;
-        notifyListeners();
-      }
+      _clearNavigation();
       return;
     }
 
@@ -394,6 +441,46 @@ class CameraInferenceController extends ChangeNotifier {
     if (changed) {
       notifyListeners();
     }
+  }
+
+  void _scheduleDepthNavigation(
+    List<YOLOResult> results,
+    Uint8List imageBytes,
+    img.Image decodedImage,
+  ) {
+    if (_isDisposed || _isDepthProcessing) return;
+    _isDepthProcessing = true;
+    unawaited(() async {
+      try {
+        await _updateDepthNavigation(
+          results: results,
+          imageBytes: imageBytes,
+          decodedImage: decodedImage,
+        );
+      } catch (error, stackTrace) {
+        debugPrint('DepthNavigation: error processing frame: $error');
+        debugPrint('$stackTrace');
+      } finally {
+        _isDepthProcessing = false;
+      }
+    }());
+  }
+
+  void _clearNavigation() {
+    if (_navigationResult != null) {
+      _navigationResult = null;
+      notifyListeners();
+    }
+  }
+
+  Uint8List? _extractImageBytes(dynamic value) {
+    if (value is Uint8List) {
+      return value;
+    }
+    if (value is List<int>) {
+      return Uint8List.fromList(value);
+    }
+    return null;
   }
 
   bool _sameNavigationObstacles(
@@ -1126,6 +1213,7 @@ class CameraInferenceController extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _voiceAnnouncer.dispose();
+    _depthNavigationService.dispose();
     _statusTimer?.cancel();
     unawaited(_voiceCommandService.dispose());
     _weatherService.dispose();
