@@ -47,6 +47,13 @@ class CameraInferenceOverlay extends StatelessWidget {
             textScaleFactor: controller.fontScale,
           ),
           const SizedBox(height: 8),
+          DepthControlSection(
+            isEnabled: controller.isDepthProcessingEnabled,
+            isAvailable: controller.isDepthServiceAvailable,
+            onChanged: controller.setDepthProcessingEnabled,
+            textScaleFactor: controller.fontScale,
+          ),
+          const SizedBox(height: 8),
           _buildThresholdPills(),
         ],
       ),
