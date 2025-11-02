@@ -46,17 +46,20 @@ class DepthControlSection extends StatelessWidget {
                     textScaleFactor: controller.fontScale,
                   ),
                 ),
-                Switch.adaptive(
-                  value: isEnabled,
-                  onChanged: isServiceReady
-                      ? controller.setDepthProcessingEnabled
-                      : null,
-                  activeColor: theme.colorScheme.secondary,
-                  inactiveThumbColor: Colors.white70,
-                  inactiveTrackColor: Colors.white30,
-                  semanticLabel: isEnabled
+                Semantics(
+                  label: isEnabled
                       ? 'Procesamiento de profundidad activado'
                       : 'Procesamiento de profundidad desactivado',
+                  toggled: isEnabled,
+                  child: Switch.adaptive(
+                    value: isEnabled,
+                    onChanged: isServiceReady
+                        ? controller.setDepthProcessingEnabled
+                        : null,
+                    activeColor: theme.colorScheme.secondary,
+                    inactiveThumbColor: Colors.white70,
+                    inactiveTrackColor: Colors.white30,
+                  ),
                 ),
               ],
             ),
