@@ -1,0 +1,56 @@
+
+name: ultralytics_yolo_example
+description: "Demonstrates how to use the ultralytics_yolo plugin."
+publish_to: "none"
+
+environment:
+  sdk: ^3.8.1
+  flutter: ">=3.32.1"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.4
+  image_picker: ^0.8.7
+  path_provider: ^2.0.0
+  archive: ^3.0.0
+  http: ^1.0.0
+  intl: ^0.19.0
+  camera: ^0.11.0+2
+  image: ^4.1.7
+  tflite_flutter: ^0.11.0
+  permission_handler: ^11.3.1
+  ultralytics_yolo:
+    git:
+      url: https://github.com/ultralytics/yolo-flutter-app.git
+      path: .
+
+  cupertino_icons: ^1.0.8
+  flutter_tts: ^3.8.0
+  speech_to_text: ^7.0.0
+  google_mlkit_text_recognition: ^0.13.0
+
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
+    - assets/models/
+    - assets/config/
+    - assets/logo.png
+    - assets/applogo.png
+    - assets/models/best_float16.tflite
+    - assets/models/carteles.tflite    # <-- AÑADE ESTA LÍNEA
+    - assets/config/calibration.json
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/applogo.png"
