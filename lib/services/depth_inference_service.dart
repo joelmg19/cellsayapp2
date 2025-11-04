@@ -37,11 +37,12 @@ class DepthFrame {
   final double maxDistanceMeters;
   final int sampleStep;
 
-  bool get isValidRange => maxValue > minValue && width > 0 && height > 0;
+  bool get hasValidDimensions =>
+      width > 0 && height > 0 && data.length >= width * height;
 
   /// Returns the raw depth value at the provided coordinates.
   double? valueAt(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) {
+    if (!hasValidDimensions || x < 0 || x >= width || y < 0 || y >= height) {
       return null;
     }
     final value = data[y * width + x];
@@ -53,7 +54,7 @@ class DepthFrame {
 
   /// Computes the average raw depth value inside a normalized bounding box.
   double? averageRawDepth(Rect normalizedBox) {
-    if (!isValidRange) return null;
+    if (!hasValidDimensions) return null;
 
     final leftPx = (normalizedBox.left.clamp(0.0, 1.0) * width).floor();
     final topPx = (normalizedBox.top.clamp(0.0, 1.0) * height).floor();
@@ -83,9 +84,13 @@ class DepthFrame {
 
   /// Converts a raw depth value into an estimated physical distance.
   double? convertRawToDistance(double rawValue) {
-    if (!isValidRange) return null;
-    final normalized = ((rawValue - minValue) / (maxValue - minValue))
-        .clamp(0.0, 1.0);
+    if (!hasValidDimensions) return null;
+    final range = maxValue - minValue;
+    if (!range.isFinite) return null;
+    final safeRange = range.abs() < 1e-6
+        ? (range.isNegative ? -1e-6 : 1e-6)
+        : range;
+    final normalized = ((rawValue - minValue) / safeRange).clamp(0.0, 1.0);
     if (normalized.isNaN || normalized.isInfinite) {
       return null;
     }
@@ -112,12 +117,15 @@ class DepthInferenceService {
     this.sampleStep = 2,
     this.minDistanceMeters = 0.3,
     this.maxDistanceMeters = 8.0,
-  });
+  }) : _configPriority = _buildConfigPriority();
 
   final String modelAssetPath;
   final int sampleStep;
   final double minDistanceMeters;
   final double maxDistanceMeters;
+
+  final List<_InterpreterConfig> _configPriority;
+  int _configIndex = 0;
 
   Interpreter? _interpreter;
   List<int>? _inputShape;
@@ -127,6 +135,7 @@ class DepthInferenceService {
   bool _isProcessing = false;
   bool _initializationAttempted = false;
 
+  Uint8List? _cachedModelBuffer;
   Float32List? _inputBufferFloat32;
   Uint8List? _inputBufferUint8;
   Float32List? _outputBufferFloat32;
@@ -140,57 +149,97 @@ class DepthInferenceService {
     _initializationAttempted = true;
 
     try {
-      final options = InterpreterOptions()
-        ..threads = Platform.isAndroid ? 4 : 2;
-      try {
-        options.addDelegate(XNNPackDelegate());
-      } catch (error) {
-        debugPrint('DepthInferenceService: XNNPACK unavailable - $error');
-      }
-      if (Platform.isAndroid) {
+      final buffer = modelBuffer ??
+          _cachedModelBuffer ??
+          (await rootBundle.load(modelAssetPath)).buffer.asUint8List();
+      _cachedModelBuffer = buffer;
+
+      for (var i = _configIndex; i < _configPriority.length; i++) {
+        final config = _configPriority[i];
         try {
-          options.addDelegate(
-            GpuDelegateV2(
-              options: GpuDelegateOptionsV2(
-                isPrecisionLossAllowed: false,
-                inferencePreference: tfl.TfLiteGpuInferenceUsage
-                    .TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED,
-              ),
-            ),
-          );
-        } catch (error) {
-          debugPrint('DepthInferenceService: GPU delegate unavailable - $error');
+          await _setupInterpreter(buffer, config);
+          _configIndex = i;
+          return;
+        } catch (error, stackTrace) {
+          debugPrint(
+              'DepthInferenceService: interpreter init failed (gpu=${config.enableGpu}, xnnpack=${config.enableXnnpack}) - $error');
+          debugPrint('$stackTrace');
+          _disposeInterpreterInternal();
         }
       }
 
-      final buffer = modelBuffer ??
-          (await rootBundle.load(modelAssetPath)).buffer.asUint8List();
-
-      _interpreter = await Interpreter.fromBuffer(buffer, options: options);
-      final inputTensor = _interpreter!.getInputTensor(0);
-      final outputTensor = _interpreter!.getOutputTensor(0);
-      _inputShape = inputTensor.shape;
-      _outputShape = outputTensor.shape;
-      _inputType = inputTensor.type;
-      _outputType = outputTensor.type;
+      throw StateError('Unable to initialize depth interpreter');
     } catch (error, stackTrace) {
       debugPrint('DepthInferenceService: failed to initialize model - $error');
       debugPrint('$stackTrace');
-      _interpreter?.close();
-      _interpreter = null;
+      _disposeInterpreterInternal();
       _initializationAttempted = false;
     }
   }
 
   Future<void> dispose() async {
+    _disposeInterpreterInternal();
+    _initializationAttempted = false;
+  }
+
+  Future<void> _setupInterpreter(
+      Uint8List buffer, _InterpreterConfig config) async {
+    final options = InterpreterOptions()
+      ..threads = Platform.isAndroid ? 4 : 2;
+
+    if (config.enableXnnpack) {
+      try {
+        options.addDelegate(XNNPackDelegate());
+      } catch (error) {
+        debugPrint('DepthInferenceService: XNNPACK unavailable - $error');
+      }
+    }
+
+    if (config.enableGpu && Platform.isAndroid) {
+      try {
+        options.addDelegate(
+          GpuDelegateV2(
+            options: GpuDelegateOptionsV2(
+              isPrecisionLossAllowed: false,
+              inferencePreference: tfl.TfLiteGpuInferenceUsage
+                  .TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED,
+            ),
+          ),
+        );
+      } catch (error) {
+        debugPrint('DepthInferenceService: GPU delegate unavailable - $error');
+      }
+    }
+
+    final interpreter = await Interpreter.fromBuffer(buffer, options: options);
+    try {
+      interpreter.allocateTensors();
+    } catch (error) {
+      interpreter.close();
+      rethrow;
+    }
+
+    _interpreter = interpreter;
+    final inputTensor = interpreter.getInputTensor(0);
+    final outputTensor = interpreter.getOutputTensor(0);
+    _inputShape = inputTensor.shape;
+    _outputShape = outputTensor.shape;
+    _inputType = inputTensor.type;
+    _outputType = outputTensor.type;
+  }
+
+  void _disposeInterpreterInternal() {
     _interpreter?.close();
     _interpreter = null;
+    _inputShape = null;
+    _outputShape = null;
+    _inputType = null;
+    _outputType = null;
     _inputBufferFloat32 = null;
     _inputBufferUint8 = null;
     _outputBufferFloat32 = null;
     _outputBufferUint8 = null;
     _depthDataBuffer = null;
-    _initializationAttempted = false;
   }
 
   Future<DepthFrame?> estimateDepth(Uint8List imageBytes) async {
@@ -202,7 +251,8 @@ class DepthInferenceService {
     return estimateDepthFromImage(decoded);
   }
 
-  Future<DepthFrame?> estimateDepthFromImage(img.Image image) async {
+  Future<DepthFrame?> estimateDepthFromImage(img.Image image,
+      {bool allowRetry = true}) async {
     if (_interpreter == null) {
       await initialize();
       if (_interpreter == null) {
@@ -268,6 +318,12 @@ class DepthInferenceService {
     } catch (error, stackTrace) {
       debugPrint('DepthInferenceService: estimation error - $error');
       debugPrint('$stackTrace');
+      final shouldRetry =
+          allowRetry && _handleInterpreterFailure(error.toString());
+      if (shouldRetry) {
+        _isProcessing = false;
+        return estimateDepthFromImage(image, allowRetry: false);
+      }
       return null;
     } finally {
       _isProcessing = false;
@@ -436,6 +492,39 @@ class DepthInferenceService {
     }
     return buffer;
   }
+
+  bool _handleInterpreterFailure(String errorMessage) {
+    final lower = errorMessage.toLowerCase();
+    final isDelegateError = lower.contains('failed precondition') ||
+        lower.contains('xnnpack') ||
+        lower.contains('delegate');
+    if (!isDelegateError) {
+      return false;
+    }
+    if (_configIndex >= _configPriority.length - 1) {
+      return false;
+    }
+    _disposeInterpreterInternal();
+    _initializationAttempted = false;
+    _configIndex += 1;
+    return true;
+  }
+
+  static List<_InterpreterConfig> _buildConfigPriority() {
+    final configs = <_InterpreterConfig>[];
+    if (Platform.isAndroid) {
+      configs.add(
+        const _InterpreterConfig(enableGpu: true, enableXnnpack: true),
+      );
+    }
+    configs.add(
+      const _InterpreterConfig(enableGpu: false, enableXnnpack: true),
+    );
+    configs.add(
+      const _InterpreterConfig(enableGpu: false, enableXnnpack: false),
+    );
+    return configs;
+  }
 }
 
 class _ParsedDepthOutput {
@@ -452,5 +541,15 @@ class _ParsedDepthOutput {
   final Float32List buffer;
   final double minValue;
   final double maxValue;
+}
+
+class _InterpreterConfig {
+  const _InterpreterConfig({
+    required this.enableGpu,
+    required this.enableXnnpack,
+  });
+
+  final bool enableGpu;
+  final bool enableXnnpack;
 }
 
