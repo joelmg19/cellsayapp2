@@ -304,14 +304,7 @@ class _DepthFrameProcessor {
   }
 
   Uint8List? _createOverlay(DepthFrame frame) {
-    _overlayBuffer ??= img.Image(width: frame.width, height: frame.height);
-    if (_overlayBuffer!.width != frame.width ||
-        _overlayBuffer!.height != frame.height) {
-      _overlayBuffer = img.Image(width: frame.width, height: frame.height);
-    } else {
-      _overlayBuffer!.fill(0);
-    }
-
+    _overlayBuffer = img.Image(width: frame.width, height: frame.height);
     final overlay = _overlayBuffer!;
     final range = (frame.maxValue - frame.minValue).abs();
     final safeRange = range == 0 ? 1.0 : range;
