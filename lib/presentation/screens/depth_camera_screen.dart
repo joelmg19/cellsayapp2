@@ -3,13 +3,12 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
-import '../../services/depth_inference_service.dart';
+import '../../services/depth_processing_worker.dart';
 
 /// Displays a live camera preview with depth estimation using the
-/// `DepthInferenceService` model.
+/// `DepthProcessingWorker` to offload heavy work to an isolate.
 class DepthCameraScreen extends StatefulWidget {
   const DepthCameraScreen({super.key});
 
@@ -17,35 +16,76 @@ class DepthCameraScreen extends StatefulWidget {
   State<DepthCameraScreen> createState() => _DepthCameraScreenState();
 }
 
-class _DepthCameraScreenState extends State<DepthCameraScreen> {
+class _DepthCameraScreenState extends State<DepthCameraScreen>
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin<DepthCameraScreen> {
   CameraController? _cameraController;
   bool _cameraReady = false;
   bool _isProcessingFrame = false;
-  DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isStreaming = false;
+  bool _isVisible = true;
+  bool _permissionGranted = false;
+  int _frameSkipCounter = 0;
 
-  final DepthInferenceService _depthService = DepthInferenceService();
+  final DepthProcessingWorker _processingWorker = DepthProcessingWorker();
 
   Uint8List? _depthOverlay;
   double? _nearestDistance;
   double? _centerDistance;
 
-  static const _processingInterval = Duration(milliseconds: 450);
+  static const int _frameSkipInterval = 3;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    WidgetsBinding.instance.addObserver(this);
+    _initializeCamera();
   }
 
-  Future<void> _initialize() async {
-    final cameraStatus = await Permission.camera.request();
-    if (!cameraStatus.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('La cámara no está disponible.')),
-        );
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopCamera(disposeController: true);
+    unawaited(_processingWorker.stop());
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _stopCamera(disposeController: true);
+    } else if (state == AppLifecycleState.resumed) {
+      _initializeCamera();
+    }
+  }
+
+  Future<void> _initializeCamera() async {
+    if (!mounted) return;
+
+    if (_cameraController != null) {
+      if (!_cameraReady) {
+        await _cameraController!.initialize();
+        _cameraReady = true;
+      }
+      if (!_isStreaming) {
+        await _cameraController!.startImageStream(_handleCameraFrame);
+        _isStreaming = true;
       }
       return;
+    }
+
+    if (!_permissionGranted) {
+      final cameraStatus = await Permission.camera.request();
+      _permissionGranted = cameraStatus.isGranted;
+      if (!_permissionGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('La cámara no está disponible.')),
+          );
+        }
+        return;
+      }
     }
 
     final cameras = await availableCameras();
@@ -65,12 +105,21 @@ class _DepthCameraScreenState extends State<DepthCameraScreen> {
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
-    await controller.initialize();
+    try {
+      await controller.initialize();
+    } catch (error, stackTrace) {
+      debugPrint('DepthCameraScreen: error inicializando cámara - $error');
+      debugPrint('$stackTrace');
+      await controller.dispose();
+      return;
+    }
 
     if (!mounted) {
       await controller.dispose();
       return;
     }
+
+    await _processingWorker.start();
 
     setState(() {
       _cameraController = controller;
@@ -78,31 +127,49 @@ class _DepthCameraScreenState extends State<DepthCameraScreen> {
     });
 
     await controller.startImageStream(_handleCameraFrame);
+    _isStreaming = true;
+  }
+
+  Future<void> _stopCamera({bool disposeController = false}) async {
+    _isProcessingFrame = false;
+    _frameSkipCounter = 0;
+    if (_cameraController != null) {
+      if (_isStreaming) {
+        try {
+          await _cameraController!.stopImageStream();
+        } catch (error) {
+          debugPrint('DepthCameraScreen: stopImageStream error - $error');
+        }
+        _isStreaming = false;
+      }
+      if (disposeController) {
+        await _cameraController?.dispose();
+        _cameraController = null;
+        _cameraReady = false;
+      }
+    }
   }
 
   Future<void> _handleCameraFrame(CameraImage image) async {
-    if (_isProcessingFrame) return;
-    final now = DateTime.now();
-    if (now.difference(_lastProcessed) < _processingInterval) {
+    if (!_isVisible || _isProcessingFrame || !_cameraReady) {
       return;
     }
 
-    _isProcessingFrame = true;
-    _lastProcessed = now;
+    if ((_frameSkipCounter++ % _frameSkipInterval) != 0) {
+      return;
+    }
+    _frameSkipCounter = 0;
 
+    _isProcessingFrame = true;
     try {
-      final jpegBytes = _convertYuvToJpeg(image);
-      final depthFrame = await _depthService.estimateDepth(jpegBytes);
-      if (depthFrame != null && mounted) {
-        final overlay = await _createDepthOverlay(depthFrame);
-        final metrics = _extractDepthMetrics(depthFrame);
-        if (!mounted) return;
-        setState(() {
-          _depthOverlay = overlay;
-          _nearestDistance = metrics.nearestDistance;
-          _centerDistance = metrics.centerDistance;
-        });
-      }
+      final result = await _processingWorker.process(image);
+      if (!mounted || result == null) return;
+      if (!_isVisible) return;
+      setState(() {
+        _depthOverlay = result.overlayBytes;
+        _nearestDistance = result.nearestDistance;
+        _centerDistance = result.centerDistance;
+      });
     } catch (error, stackTrace) {
       debugPrint('DepthCameraScreen: error procesando frame - $error');
       debugPrint('$stackTrace');
@@ -111,108 +178,24 @@ class _DepthCameraScreenState extends State<DepthCameraScreen> {
     }
   }
 
-  Future<Uint8List> _createDepthOverlay(DepthFrame frame) async {
-    final depthImage = img.Image(width: frame.width, height: frame.height);
-    final range = (frame.maxValue - frame.minValue).abs();
-    final safeRange = range == 0 ? 1.0 : range;
-
-    for (int y = 0; y < frame.height; y++) {
-      for (int x = 0; x < frame.width; x++) {
-        final value = frame.valueAt(x, y);
-        final normalized = value == null
-            ? 0.0
-            : ((value - frame.minValue) / safeRange).clamp(0.0, 1.0);
-        final color = _colorForNormalizedValue(normalized);
-        depthImage.setPixelRgba(x, y, color[0], color[1], color[2], 180);
-      }
-    }
-
-    return Uint8List.fromList(img.encodePng(depthImage));
-  }
-
-  _DepthMetrics _extractDepthMetrics(DepthFrame frame) {
-    double nearest = double.infinity;
-    double centerSum = 0;
-    int centerCount = 0;
-
-    final minX = (frame.width * 0.35).floor();
-    final maxX = (frame.width * 0.65).ceil();
-    final minY = (frame.height * 0.35).floor();
-    final maxY = (frame.height * 0.65).ceil();
-
-    for (int y = 0; y < frame.height; y += frame.sampleStep) {
-      for (int x = 0; x < frame.width; x += frame.sampleStep) {
-        final value = frame.valueAt(x, y);
-        if (value == null) continue;
-        final distance = frame.convertRawToDistance(value);
-        if (distance == null) continue;
-        if (distance < nearest) {
-          nearest = distance;
-        }
-        if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
-          centerSum += distance;
-          centerCount++;
-        }
-      }
-    }
-
-    final nearestDistance = nearest.isFinite ? nearest : null;
-    final centerDistance = centerCount > 0 ? centerSum / centerCount : null;
-
-    return _DepthMetrics(
-      nearestDistance: nearestDistance,
-      centerDistance: centerDistance,
-    );
-  }
-
-  List<int> _colorForNormalizedValue(double normalized) {
-    final clamped = normalized.clamp(0.0, 1.0);
-    final red = (255 * (1.0 - clamped)).round().clamp(0, 255);
-    final green =
-        (255 * (1.0 - (2 * (clamped - 0.5)).abs())).round().clamp(0, 255);
-    final blue = (255 * clamped).round().clamp(0, 255);
-    return [red, green, blue];
-  }
-
-  Uint8List _convertYuvToJpeg(CameraImage image) {
-    final width = image.width;
-    final height = image.height;
-    final rgbImage = img.Image(width: width, height: height);
-
-    final yPlane = image.planes[0];
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final yp = yPlane.bytes[y * yPlane.bytesPerRow + x];
-        final uvIndex =
-            (y ~/ 2) * uPlane.bytesPerRow + (x ~/ 2) * (uPlane.bytesPerPixel ?? 1);
-
-        final up = uPlane.bytes[uvIndex];
-        final vp = vPlane.bytes[uvIndex];
-
-        int r = (yp + 1.370705 * (vp - 128)).clamp(0, 255).toInt();
-        int g =
-            (yp - 0.698001 * (vp - 128) - 0.337633 * (up - 128)).clamp(0, 255).toInt();
-        int b = (yp + 1.732446 * (up - 128)).clamp(0, 255).toInt();
-
-        rgbImage.setPixelRgba(x, y, r, g, b, 255);
-      }
-    }
-
-    return Uint8List.fromList(img.encodeJpg(rgbImage, quality: 90));
+  @override
+  void deactivate() {
+    _isVisible = false;
+    super.deactivate();
   }
 
   @override
-  void dispose() {
-    _cameraController?.dispose();
-    unawaited(_depthService.dispose());
-    super.dispose();
+  void activate() {
+    super.activate();
+    _isVisible = true;
   }
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Profundidad en tiempo real')),
       body: _cameraReady && _cameraController != null
@@ -258,7 +241,7 @@ class _DepthCameraScreenState extends State<DepthCameraScreen> {
             Text(
               _nearestDistance != null
                   ? 'Objeto más cercano: ${_nearestDistance!.toStringAsFixed(2)} m'
-                  : 'Buscando profundidad…',
+                  : 'Sin datos del objeto más cercano',
               style: style,
             ),
             const SizedBox(height: 4),
@@ -273,14 +256,4 @@ class _DepthCameraScreenState extends State<DepthCameraScreen> {
       ),
     );
   }
-}
-
-class _DepthMetrics {
-  const _DepthMetrics({
-    required this.nearestDistance,
-    required this.centerDistance,
-  });
-
-  final double? nearestDistance;
-  final double? centerDistance;
 }
