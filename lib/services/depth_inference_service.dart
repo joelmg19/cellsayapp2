@@ -125,20 +125,46 @@ class DepthInferenceService {
   bool _isProcessing = false;
   bool _initializationAttempted = false;
 
+  Float32List? _inputBufferFloat32;
+  Uint8List? _inputBufferUint8;
+  Float32List? _outputBufferFloat32;
+  Uint8List? _outputBufferUint8;
+  Float32List? _depthDataBuffer;
+
   bool get isInitialized => _interpreter != null;
 
-  Future<void> initialize() async {
+  Future<void> initialize({Uint8List? modelBuffer}) async {
     if (_interpreter != null || _initializationAttempted) return;
     _initializationAttempted = true;
 
     try {
       final options = InterpreterOptions()
         ..threads = Platform.isAndroid ? 4 : 2;
-      final modelData = await rootBundle.load(modelAssetPath);
-      _interpreter = await Interpreter.fromBuffer(
-        modelData.buffer.asUint8List(),
-        options: options,
-      );
+      try {
+        options.addDelegate(XNNPackDelegate());
+      } catch (error) {
+        debugPrint('DepthInferenceService: XNNPACK unavailable - $error');
+      }
+      if (Platform.isAndroid) {
+        try {
+          options.addDelegate(
+            GpuDelegateV2(
+              options: GpuDelegateOptionsV2(
+                isPrecisionLossAllowed: false,
+                inferencePreference:
+                    GpuDelegateOptionsV2.inferencePreferenceSustainedSpeed,
+              ),
+            ),
+          );
+        } catch (error) {
+          debugPrint('DepthInferenceService: GPU delegate unavailable - $error');
+        }
+      }
+
+      final buffer = modelBuffer ??
+          (await rootBundle.load(modelAssetPath)).buffer.asUint8List();
+
+      _interpreter = await Interpreter.fromBuffer(buffer, options: options);
       final inputTensor = _interpreter!.getInputTensor(0);
       final outputTensor = _interpreter!.getOutputTensor(0);
       _inputShape = inputTensor.shape;
@@ -157,9 +183,24 @@ class DepthInferenceService {
   Future<void> dispose() async {
     _interpreter?.close();
     _interpreter = null;
+    _inputBufferFloat32 = null;
+    _inputBufferUint8 = null;
+    _outputBufferFloat32 = null;
+    _outputBufferUint8 = null;
+    _depthDataBuffer = null;
+    _initializationAttempted = false;
   }
 
   Future<DepthFrame?> estimateDepth(Uint8List imageBytes) async {
+    final decoded = img.decodeImage(imageBytes);
+    if (decoded == null) {
+      debugPrint('DepthInferenceService: unable to decode image');
+      return null;
+    }
+    return estimateDepthFromImage(decoded);
+  }
+
+  Future<DepthFrame?> estimateDepthFromImage(img.Image image) async {
     if (_interpreter == null) {
       await initialize();
       if (_interpreter == null) {
@@ -170,34 +211,46 @@ class DepthInferenceService {
     if (_isProcessing) return null;
     _isProcessing = true;
     try {
-      final decoded = img.decodeImage(imageBytes);
-      if (decoded == null) {
-        debugPrint('DepthInferenceService: unable to decode image');
-        return null;
-      }
-
       final inputShape = _inputShape ?? _interpreter!.getInputTensor(0).shape;
       final targetHeight = _dimensionFromShape(inputShape, axisFromEnd: 3);
       final targetWidth = _dimensionFromShape(inputShape, axisFromEnd: 2);
       final targetChannels = _dimensionFromShape(inputShape, axisFromEnd: 1);
 
       final resized = img.copyResize(
-        decoded,
+        image,
         width: targetWidth,
         height: targetHeight,
         interpolation: img.Interpolation.linear,
       );
 
-      final input = _prepareInputTensor(
+      final inputType = _inputType ?? TensorType.float32;
+      final inputBuffer = _prepareInputBuffer(
         resized,
         targetChannels,
-        _inputType ?? TensorType.float32,
+        inputType,
       );
 
-      final outputContainer = _createOutputContainer();
-      _interpreter!.run(input, outputContainer);
+      final outputShape = _outputShape ?? _interpreter!.getOutputTensor(0).shape;
+      final outputChannels = _dimensionFromShape(outputShape, axisFromEnd: 1);
+      final outputHeight = _dimensionFromShape(outputShape, axisFromEnd: 3);
+      final outputWidth = _dimensionFromShape(outputShape, axisFromEnd: 2);
+      final outputType = _outputType ?? TensorType.float32;
+      final outputBuffer = _prepareOutputBuffer(
+        outputHeight,
+        outputWidth,
+        outputChannels,
+        outputType,
+      );
 
-      final parsed = _parseOutput(outputContainer);
+      _interpreter!.run(inputBuffer, outputBuffer);
+
+      final parsed = _parseOutputFromBuffer(
+        outputBuffer,
+        outputHeight,
+        outputWidth,
+        outputChannels,
+        outputType,
+      );
       if (parsed == null) return null;
 
       return DepthFrame(
@@ -228,117 +281,99 @@ class DepthInferenceService {
     return shape[index];
   }
 
-  dynamic _prepareInputTensor(
+  dynamic _prepareInputBuffer(
     img.Image image,
     int channels,
     TensorType inputType,
   ) {
     final height = image.height;
     final width = image.width;
+    final length = height * width * channels;
 
-    dynamic channelValues(img.Pixel pixel) {
-      final r = pixel.r;
-      final g = pixel.g;
-      final b = pixel.b;
-      if (channels <= 1) {
-        final luminance = img.getLuminanceRgb(r, g, b);
-        return [luminance];
+    if (inputType == TensorType.float32) {
+      final buffer = _ensureInputFloat32(length);
+      var offset = 0;
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final pixel = image.getPixel(x, y);
+          if (channels <= 1) {
+            buffer[offset++] =
+                img.getLuminanceRgb(pixel.r, pixel.g, pixel.b) / 255.0;
+          } else {
+            buffer[offset++] = pixel.r / 255.0;
+            buffer[offset++] = pixel.g / 255.0;
+            buffer[offset++] = pixel.b / 255.0;
+          }
+        }
       }
-      if (inputType == TensorType.float32) {
-        return [r / 255.0, g / 255.0, b / 255.0];
-      }
-      return [r, g, b];
+      return buffer;
     }
 
-    final result = List.generate(
-      1,
-      (_) => List.generate(height, (y) {
-        return List.generate(width, (x) {
-          final pixel = image.getPixel(x, y);
-          final values = channelValues(pixel);
-          if (inputType == TensorType.float32) {
-            return values.map((value) {
-              if (value is num) {
-                return value.toDouble();
-              }
-              return 0.0;
-            }).toList(growable: false);
-          }
-          return values.map((value) {
-            if (value is num) {
-              return value.toInt();
-            }
-            return 0;
-          }).toList(growable: false);
-        }).toList(growable: false);
-      }).toList(growable: false),
-    );
-
-    return result;
+    final buffer = _ensureInputUint8(length);
+    var offset = 0;
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final pixel = image.getPixel(x, y);
+        if (channels <= 1) {
+          final luminance = img.getLuminanceRgb(pixel.r, pixel.g, pixel.b);
+          buffer[offset++] = luminance;
+        } else {
+          buffer[offset++] = pixel.r;
+          buffer[offset++] = pixel.g;
+          buffer[offset++] = pixel.b;
+        }
+      }
+    }
+    return buffer;
   }
 
-  List<dynamic> _createOutputContainer() {
-    final outputShape = _outputShape ?? _interpreter!.getOutputTensor(0).shape;
-    final height = _dimensionFromShape(outputShape, axisFromEnd: 3);
-    final width = _dimensionFromShape(outputShape, axisFromEnd: 2);
-    final channels = _dimensionFromShape(outputShape, axisFromEnd: 1);
-
-    return [
-      List.generate(height, (_) {
-        return List.generate(width, (_) {
-          if ((_outputType ?? TensorType.float32) == TensorType.float32) {
-            if (channels <= 1) {
-              return [0.0];
-            }
-            return List<double>.filled(channels, 0.0);
-          }
-          if (channels <= 1) {
-            return [0];
-          }
-          return List<int>.filled(channels, 0);
-        });
-      }),
-    ];
+  dynamic _prepareOutputBuffer(
+    int height,
+    int width,
+    int channels,
+    TensorType outputType,
+  ) {
+    final length = height * width * channels;
+    if (outputType == TensorType.float32) {
+      return _ensureOutputFloat32(length);
+    }
+    return _ensureOutputUint8(length);
   }
 
-  _ParsedDepthOutput? _parseOutput(List<dynamic> outputContainer) {
-    if (outputContainer.isEmpty) return null;
-    final rawOutput = outputContainer.first;
-    if (rawOutput is! List) return null;
-    final height = rawOutput.length;
-    if (height == 0) return null;
-
-    final firstRow = rawOutput.first;
-    if (firstRow is! List) return null;
-    final width = firstRow.length;
-    if (width == 0) return null;
-
-    final buffer = Float32List(height * width);
+  _ParsedDepthOutput? _parseOutputFromBuffer(
+    dynamic buffer,
+    int height,
+    int width,
+    int channels,
+    TensorType outputType,
+  ) {
+    final depthBuffer = _ensureDepthDataBuffer(height * width);
     double minValue = double.infinity;
     double maxValue = -double.infinity;
 
-    for (int y = 0; y < height; y++) {
-      final row = rawOutput[y];
-      if (row is! List) continue;
-      for (int x = 0; x < width; x++) {
-        if (x >= row.length) continue;
-        final cell = row[x];
-        double? value;
-        if (cell is List && cell.isNotEmpty) {
-          final element = cell.first;
-          if (element is num) {
-            value = element.toDouble();
-          }
-        } else if (cell is num) {
-          value = cell.toDouble();
+    if (outputType == TensorType.float32 && buffer is Float32List) {
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final index = (y * width + x) * channels;
+          final value = buffer[index];
+          if (!value.isFinite) continue;
+          depthBuffer[y * width + x] = value;
+          if (value < minValue) minValue = value;
+          if (value > maxValue) maxValue = value;
         }
-        if (value == null || value.isNaN || value.isInfinite) {
-          continue;
-        }
-        buffer[y * width + x] = value;
-        if (value < minValue) minValue = value;
-        if (value > maxValue) maxValue = value;
       }
+    } else if (outputType == TensorType.uint8 && buffer is Uint8List) {
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final index = (y * width + x) * channels;
+          final value = buffer[index].toDouble();
+          depthBuffer[y * width + x] = value;
+          if (value < minValue) minValue = value;
+          if (value > maxValue) maxValue = value;
+        }
+      }
+    } else {
+      return null;
     }
 
     if (!minValue.isFinite || !maxValue.isFinite) {
@@ -348,10 +383,55 @@ class DepthInferenceService {
     return _ParsedDepthOutput(
       width: width,
       height: height,
-      buffer: buffer,
+      buffer: Float32List.fromList(depthBuffer),
       minValue: minValue,
       maxValue: maxValue,
     );
+  }
+
+  Float32List _ensureInputFloat32(int length) {
+    final buffer = _inputBufferFloat32;
+    if (buffer == null || buffer.length != length) {
+      _inputBufferFloat32 = Float32List(length);
+      return _inputBufferFloat32!;
+    }
+    return buffer;
+  }
+
+  Uint8List _ensureInputUint8(int length) {
+    final buffer = _inputBufferUint8;
+    if (buffer == null || buffer.length != length) {
+      _inputBufferUint8 = Uint8List(length);
+      return _inputBufferUint8!;
+    }
+    return buffer;
+  }
+
+  Float32List _ensureOutputFloat32(int length) {
+    final buffer = _outputBufferFloat32;
+    if (buffer == null || buffer.length != length) {
+      _outputBufferFloat32 = Float32List(length);
+      return _outputBufferFloat32!;
+    }
+    return buffer;
+  }
+
+  Uint8List _ensureOutputUint8(int length) {
+    final buffer = _outputBufferUint8;
+    if (buffer == null || buffer.length != length) {
+      _outputBufferUint8 = Uint8List(length);
+      return _outputBufferUint8!;
+    }
+    return buffer;
+  }
+
+  Float32List _ensureDepthDataBuffer(int length) {
+    final buffer = _depthDataBuffer;
+    if (buffer == null || buffer.length != length) {
+      _depthDataBuffer = Float32List(length);
+      return _depthDataBuffer!;
+    }
+    return buffer;
   }
 }
 
