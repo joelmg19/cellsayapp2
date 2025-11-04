@@ -63,14 +63,29 @@ class _DepthCameraScreenState extends State<DepthCameraScreen>
   Future<void> _initializeCamera() async {
     if (!mounted) return;
 
-    if (_cameraController != null) {
+    final existingController = _cameraController;
+    if (existingController != null) {
       if (!_cameraReady) {
-        await _cameraController!.initialize();
-        _cameraReady = true;
+        try {
+          await existingController.initialize();
+          if (!mounted) return;
+          setState(() {
+            _cameraReady = true;
+          });
+        } catch (error, stackTrace) {
+          debugPrint('DepthCameraScreen: error re-inicializando cámara - $error');
+          debugPrint('$stackTrace');
+          return;
+        }
       }
       if (!_isStreaming) {
-        await _cameraController!.startImageStream(_handleCameraFrame);
-        _isStreaming = true;
+        try {
+          await existingController.startImageStream(_handleCameraFrame);
+          _isStreaming = true;
+        } catch (error, stackTrace) {
+          debugPrint('DepthCameraScreen: error reiniciando stream - $error');
+          debugPrint('$stackTrace');
+        }
       }
       return;
     }
@@ -133,19 +148,33 @@ class _DepthCameraScreenState extends State<DepthCameraScreen>
   Future<void> _stopCamera({bool disposeController = false}) async {
     _isProcessingFrame = false;
     _frameSkipCounter = 0;
-    if (_cameraController != null) {
+    final controller = _cameraController;
+    if (controller != null) {
       if (_isStreaming) {
         try {
-          await _cameraController!.stopImageStream();
+          await controller.stopImageStream();
         } catch (error) {
           debugPrint('DepthCameraScreen: stopImageStream error - $error');
         }
         _isStreaming = false;
       }
       if (disposeController) {
-        await _cameraController?.dispose();
-        _cameraController = null;
-        _cameraReady = false;
+        await controller.dispose();
+        if (mounted) {
+          setState(() {
+            _cameraController = null;
+            _cameraReady = false;
+            _depthOverlay = null;
+            _nearestDistance = null;
+            _centerDistance = null;
+          });
+        } else {
+          _cameraController = null;
+          _cameraReady = false;
+          _depthOverlay = null;
+          _nearestDistance = null;
+          _centerDistance = null;
+        }
       }
     }
   }
@@ -198,7 +227,9 @@ class _DepthCameraScreenState extends State<DepthCameraScreen>
     super.build(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Profundidad en tiempo real')),
-      body: _cameraReady && _cameraController != null
+      body: _cameraReady &&
+              _cameraController != null &&
+              _cameraController!.value.isInitialized
           ? Stack(
               fit: StackFit.expand,
               children: [
