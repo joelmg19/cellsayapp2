@@ -140,57 +140,87 @@ class DepthInferenceService {
     _initializationAttempted = true;
 
     try {
-      final options = InterpreterOptions()
-        ..threads = Platform.isAndroid ? 4 : 2;
-      try {
-        options.addDelegate(XNNPackDelegate());
-      } catch (error) {
-        debugPrint('DepthInferenceService: XNNPACK unavailable - $error');
-      }
-      if (Platform.isAndroid) {
-        try {
-          options.addDelegate(
-            GpuDelegateV2(
-              options: GpuDelegateOptionsV2(
-                isPrecisionLossAllowed: false,
-                inferencePreference: tfl.TfLiteGpuInferenceUsage
-                    .TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED,
-              ),
-            ),
-          );
-        } catch (error) {
-          debugPrint('DepthInferenceService: GPU delegate unavailable - $error');
-        }
-      }
-
       final buffer = modelBuffer ??
           (await rootBundle.load(modelAssetPath)).buffer.asUint8List();
 
-      _interpreter = await Interpreter.fromBuffer(buffer, options: options);
-      final inputTensor = _interpreter!.getInputTensor(0);
-      final outputTensor = _interpreter!.getOutputTensor(0);
-      _inputShape = inputTensor.shape;
-      _outputShape = outputTensor.shape;
-      _inputType = inputTensor.type;
-      _outputType = outputTensor.type;
+      try {
+        await _setupInterpreter(buffer, enableGpuDelegate: Platform.isAndroid);
+      } catch (error, stackTrace) {
+        debugPrint(
+            'DepthInferenceService: GPU delegate initialization failed - $error');
+        debugPrint('$stackTrace');
+        _disposeInterpreterInternal();
+        await _setupInterpreter(buffer, enableGpuDelegate: false);
+      }
     } catch (error, stackTrace) {
       debugPrint('DepthInferenceService: failed to initialize model - $error');
       debugPrint('$stackTrace');
-      _interpreter?.close();
-      _interpreter = null;
+      _disposeInterpreterInternal();
       _initializationAttempted = false;
     }
   }
 
   Future<void> dispose() async {
+    _disposeInterpreterInternal();
+    _initializationAttempted = false;
+  }
+
+  Future<void> _setupInterpreter(Uint8List buffer,
+      {required bool enableGpuDelegate}) async {
+    final options = InterpreterOptions()
+      ..threads = Platform.isAndroid ? 4 : 2;
+
+    try {
+      options.addDelegate(XNNPackDelegate());
+    } catch (error) {
+      debugPrint('DepthInferenceService: XNNPACK unavailable - $error');
+    }
+
+    if (enableGpuDelegate && Platform.isAndroid) {
+      try {
+        options.addDelegate(
+          GpuDelegateV2(
+            options: GpuDelegateOptionsV2(
+              isPrecisionLossAllowed: false,
+              inferencePreference: tfl.TfLiteGpuInferenceUsage
+                  .TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED,
+            ),
+          ),
+        );
+      } catch (error) {
+        debugPrint('DepthInferenceService: GPU delegate unavailable - $error');
+      }
+    }
+
+    final interpreter = await Interpreter.fromBuffer(buffer, options: options);
+    try {
+      interpreter.allocateTensors();
+    } catch (error) {
+      interpreter.close();
+      rethrow;
+    }
+
+    _interpreter = interpreter;
+    final inputTensor = interpreter.getInputTensor(0);
+    final outputTensor = interpreter.getOutputTensor(0);
+    _inputShape = inputTensor.shape;
+    _outputShape = outputTensor.shape;
+    _inputType = inputTensor.type;
+    _outputType = outputTensor.type;
+  }
+
+  void _disposeInterpreterInternal() {
     _interpreter?.close();
     _interpreter = null;
+    _inputShape = null;
+    _outputShape = null;
+    _inputType = null;
+    _outputType = null;
     _inputBufferFloat32 = null;
     _inputBufferUint8 = null;
     _outputBufferFloat32 = null;
     _outputBufferUint8 = null;
     _depthDataBuffer = null;
-    _initializationAttempted = false;
   }
 
   Future<DepthFrame?> estimateDepth(Uint8List imageBytes) async {
