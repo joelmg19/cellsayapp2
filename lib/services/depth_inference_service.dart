@@ -6,6 +6,8 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
+import 'package:tflite_flutter/src/bindings/tensorflow_lite_bindings_generated.dart'
+    as tfl;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 /// Represents a single depth map prediction from the depth model.
@@ -151,8 +153,8 @@ class DepthInferenceService {
             GpuDelegateV2(
               options: GpuDelegateOptionsV2(
                 isPrecisionLossAllowed: false,
-                inferencePreference:
-                    GpuDelegateOptionsV2.inferencePreferenceSustainedSpeed,
+                inferencePreference: tfl.TfLiteGpuInferenceUsage
+                    .TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED,
               ),
             ),
           );
@@ -315,12 +317,13 @@ class DepthInferenceService {
       for (int x = 0; x < width; x++) {
         final pixel = image.getPixel(x, y);
         if (channels <= 1) {
-          final luminance = img.getLuminanceRgb(pixel.r, pixel.g, pixel.b);
-          buffer[offset++] = luminance;
+          final luminance =
+              img.getLuminanceRgb(pixel.r, pixel.g, pixel.b).clamp(0, 255);
+          buffer[offset++] = luminance.toInt();
         } else {
-          buffer[offset++] = pixel.r;
-          buffer[offset++] = pixel.g;
-          buffer[offset++] = pixel.b;
+          buffer[offset++] = pixel.r.toInt();
+          buffer[offset++] = pixel.g.toInt();
+          buffer[offset++] = pixel.b.toInt();
         }
       }
     }
