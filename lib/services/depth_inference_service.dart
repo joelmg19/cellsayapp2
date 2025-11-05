@@ -103,10 +103,10 @@ class DepthFrame {
   }
 }
 
-/// Service responsible for running the depth Anything TFLite model.
+/// Service responsible for running the depth estimation TFLite model.
 class DepthInferenceService {
   DepthInferenceService({
-    this.modelAssetPath = 'assets/models/depth_anything.tflite',
+    this.modelAssetPath = 'assets/models/midasv2_w8a8.tflite',
     this.sampleStep = 2,
     this.minDistanceMeters = 0.3,
     this.maxDistanceMeters = 8.0,
