@@ -146,5 +146,4 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       ),
     );
   }
-
 }

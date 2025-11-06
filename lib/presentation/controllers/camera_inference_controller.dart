@@ -2,9 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui; // Import para ui.Size
 
-// --- INICIO DE MODIFICACIÓN (Import para 'compute') ---
 import 'package:flutter/foundation.dart';
-// --- FIN DE MODIFICACIÓN ---
 import 'package:flutter/material.dart';
 // Import para ML Kit OCR, escondiendo 'ModelManager' para evitar conflicto
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart'
@@ -13,9 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
-// --- INICIO DE MODIFICACIÓN (Importar paquete 'image') ---
 import 'package:image/image.dart' as img;
-// --- FIN DE MODIFICACIÓN ---
 
 import '../../core/vision/detection_distance_extension.dart';
 import '../../core/vision/detection_geometry.dart';
@@ -33,7 +29,6 @@ import '../../services/weather_service.dart';
 
 /// Controller that manages the state and business logic for camera inference
 class CameraInferenceController extends ChangeNotifier {
-  // --- (Nuevas variables para OCR) ---
   final TextRecognizer _textRecognizer = TextRecognizer();
   bool _isOcrBusy = false;
   DateTime _lastOcrTimestamp = DateTime.now();
@@ -45,7 +40,10 @@ class CameraInferenceController extends ChangeNotifier {
     'letrero tienda',
     'publicidad de comida',
   ];
-  // --- (FIN Nuevas variables para OCR) ---
+  String? _lastAnnouncedOcrMessage;
+  DateTime? _lastAnnouncedOcrTimestamp;
+  Uint8List? _cachedCartelImage;
+  DateTime? _cachedCartelImageTimestamp;
 
   // --- VARIABLES ORIGINALES ---
   int _detectionCount = 0;
@@ -131,6 +129,8 @@ class CameraInferenceController extends ChangeNotifier {
   YOLOViewController get yoloController => _yoloController;
   bool get isDepthProcessingEnabled => _isDepthProcessingEnabled;
   bool get isDepthServiceAvailable => _depthService != null;
+  Uint8List? get cachedCartelImage => _cachedCartelImage;
+  DateTime? get cachedCartelImageTimestamp => _cachedCartelImageTimestamp;
   // --- FIN DE GETTERS ORIGINALES ---
 
   CameraInferenceController({ModelType initialModel = ModelType.Interior})
@@ -214,6 +214,17 @@ class CameraInferenceController extends ChangeNotifier {
 
     final processed = _postProcessor.process(results);
     final filtered = processed.filteredResults;
+    if (_selectedModel == ModelType.LectorCarteles) {
+      final hasCartelDetections = filtered.any(
+        (d) => _cartelClasses.contains(extractLabel(d).toLowerCase()),
+      );
+      if (!hasCartelDetections) {
+        _cachedCartelImage = null;
+        _cachedCartelImageTimestamp = null;
+        _lastAnnouncedOcrMessage = null;
+        _lastAnnouncedOcrTimestamp = null;
+      }
+    }
     final filteredCount = filtered.length;
 
     bool shouldNotify = false;
@@ -369,6 +380,9 @@ class CameraInferenceController extends ChangeNotifier {
       ) async {
     if (_isDisposed) return;
 
+    _cachedCartelImage = Uint8List.fromList(imageBytes);
+    _cachedCartelImageTimestamp = detectionTime;
+
     final cartelDetections = processed.filteredResults
         .where((d) => _cartelClasses.contains(extractLabel(d).toLowerCase()))
         .toList();
@@ -413,18 +427,18 @@ class CameraInferenceController extends ChangeNotifier {
 
     // 5. Procesar la imagen completa para OCR
     final RecognizedText recognizedText =
-    await _textRecognizer.processImage(inputImage);
+        await _textRecognizer.processImage(inputImage);
 
     if (_isDisposed) return;
 
     // 6. Mapear texto a carteles
-    String ocrAnnouncement = "";
+    final StringBuffer announcementBuilder = StringBuffer();
 
     for (final cartel in cartelDetections) {
       final cartelRect = extractBoundingBox(cartel); // Rect de 0.0 a 1.0
       if (cartelRect == null) continue;
 
-      String textoDelCartel = "";
+      final StringBuffer textoDelCartel = StringBuffer();
       for (final block in recognizedText.blocks) {
         // Convertir BoundingBox de MLKit (pixeles) a Rect normalizado
         final blockRect = Rect.fromLTWH(
@@ -436,25 +450,49 @@ class CameraInferenceController extends ChangeNotifier {
 
         // 7. Comprobar si el texto está (parcialmente) dentro del cartel
         if (cartelRect.overlaps(blockRect)) {
-          textoDelCartel += block.text.replaceAll('\n', ' ') + " ";
+          textoDelCartel
+            ..write(block.text.replaceAll('\n', ' '))
+            ..write(' ');
         }
       }
 
-      if (textoDelCartel.trim().isNotEmpty) {
+      final textoCartel = textoDelCartel.toString().trim();
+      if (textoCartel.isNotEmpty) {
         // 8. Combinar el anuncio (usando extractLabel)
         final label = extractLabel(cartel, fallback: "cartel");
-        ocrAnnouncement += "Detecté un $label. Dice: ${textoDelCartel.trim()}. ";
+        announcementBuilder
+          ..write('Detecté un $label. ')
+          ..write('Dice: ')
+          ..write(textoCartel)
+          ..write('. ');
       }
     }
 
-    // 9. Anunciar el texto del OCR (si es nuevo)
-    if (ocrAnnouncement.isNotEmpty) {
-      await _announceSystemMessage(
-        ocrAnnouncement,
-        force: true,
-        bypassCooldown: true,
-      );
+    final ocrAnnouncement = announcementBuilder.toString().trim();
+
+    if (ocrAnnouncement.isEmpty) {
+      return;
     }
+
+    final now = DateTime.now();
+    final lastMessage = _lastAnnouncedOcrMessage;
+    final lastTimestamp = _lastAnnouncedOcrTimestamp;
+
+    if (lastMessage != null &&
+        lastTimestamp != null &&
+        lastMessage == ocrAnnouncement &&
+        now.difference(lastTimestamp) < const Duration(seconds: 10)) {
+      return;
+    }
+
+    _lastAnnouncedOcrMessage = ocrAnnouncement;
+    _lastAnnouncedOcrTimestamp = now;
+
+    await _announceSystemMessage(
+      ocrAnnouncement,
+      force: true,
+      bypassCooldown: true,
+    );
   }
   // --- FIN DE MODIFICACIÓN ---
 
