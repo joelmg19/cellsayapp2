@@ -211,6 +211,7 @@ class CameraInferenceController extends ChangeNotifier {
       (d) => isCartelLabel(extractLabel(d)),
     );
 
+    bool shouldNotify = false;
     if (_selectedModel == ModelType.LectorCarteles) {
       if (!hasCartelDetections) {
         _cachedCartelImage = null;
@@ -221,8 +222,6 @@ class CameraInferenceController extends ChangeNotifier {
       }
     }
     final filteredCount = filtered.length;
-
-    bool shouldNotify = false;
 
     if (_detectionCount != filteredCount) {
       _detectionCount = filteredCount;
