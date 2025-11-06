@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:ui';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../core/vision/detection_geometry.dart';
+import '../core/vision/cartel_labels.dart';
 import '../models/detection_insight.dart';
 
 Rect _normalizeRect(Rect rect) {
@@ -81,7 +82,8 @@ class DetectionPostProcessor {
       if (!shouldSelect) continue;
       selected.add(candidate);
 
-      if (candidate.normalizedArea >= _closeObstacleAreaThreshold) {
+      if (candidate.normalizedArea >= _closeObstacleAreaThreshold &&
+          !isCartelLabel(candidate.label)) {
         closeObstacles.add(candidate.label);
       }
 
