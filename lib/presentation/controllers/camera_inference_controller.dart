@@ -13,6 +13,7 @@ import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
 import 'package:image/image.dart' as img;
 
+import '../../core/vision/cartel_labels.dart';
 import '../../core/vision/detection_distance_extension.dart';
 import '../../core/vision/detection_geometry.dart';
 import '../../core/vision/distance_estimator.dart';
@@ -32,14 +33,6 @@ class CameraInferenceController extends ChangeNotifier {
   final TextRecognizer _textRecognizer = TextRecognizer();
   bool _isOcrBusy = false;
   DateTime _lastOcrTimestamp = DateTime.now();
-  final List<String> _cartelClasses = const [
-    'anuncios informativos',
-    'anuncios publicitarios',
-    'carteles de comida',
-    'letrero direccion',
-    'letrero tienda',
-    'publicidad de comida',
-  ];
   String? _lastAnnouncedOcrMessage;
   DateTime? _lastAnnouncedOcrTimestamp;
   Uint8List? _cachedCartelImage;
@@ -214,15 +207,17 @@ class CameraInferenceController extends ChangeNotifier {
 
     final processed = _postProcessor.process(results);
     final filtered = processed.filteredResults;
+    final hasCartelDetections = filtered.any(
+      (d) => isCartelLabel(extractLabel(d)),
+    );
+
     if (_selectedModel == ModelType.LectorCarteles) {
-      final hasCartelDetections = filtered.any(
-        (d) => _cartelClasses.contains(extractLabel(d).toLowerCase()),
-      );
       if (!hasCartelDetections) {
         _cachedCartelImage = null;
         _cachedCartelImageTimestamp = null;
         _lastAnnouncedOcrMessage = null;
         _lastAnnouncedOcrTimestamp = null;
+        shouldNotify = true;
       }
     }
     final filteredCount = filtered.length;
@@ -380,14 +375,15 @@ class CameraInferenceController extends ChangeNotifier {
       ) async {
     if (_isDisposed) return;
 
-    _cachedCartelImage = Uint8List.fromList(imageBytes);
-    _cachedCartelImageTimestamp = detectionTime;
-
     final cartelDetections = processed.filteredResults
-        .where((d) => _cartelClasses.contains(extractLabel(d).toLowerCase()))
+        .where((d) => isCartelLabel(extractLabel(d)))
         .toList();
 
     if (cartelDetections.isEmpty) return;
+
+    _cachedCartelImage = Uint8List.fromList(imageBytes);
+    _cachedCartelImageTimestamp = detectionTime;
+    notifyListeners();
 
     // --- (Decodificar JPEG) ---
 
@@ -459,9 +455,8 @@ class CameraInferenceController extends ChangeNotifier {
       final textoCartel = textoDelCartel.toString().trim();
       if (textoCartel.isNotEmpty) {
         // 8. Combinar el anuncio (usando extractLabel)
-        final label = extractLabel(cartel, fallback: "cartel");
         announcementBuilder
-          ..write('Detecté un $label. ')
+          ..write('Cartel detectado. ')
           ..write('Dice: ')
           ..write(textoCartel)
           ..write('. ');
