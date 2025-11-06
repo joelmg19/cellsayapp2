@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../core/tts/tts_helpers.dart';
+import '../core/vision/cartel_labels.dart';
 import '../core/vision/detection_distance_extension.dart';
+import '../core/vision/detection_geometry.dart';
 import '../models/detection_insight.dart';
 import '../models/voice_settings.dart';
 
@@ -152,13 +154,25 @@ class VoiceAnnouncer {
 
     await _ensureConfigured();
 
-    final now = DateTime.now();
-    if (_shouldRespectCooldown(now)) {
+    final message = _buildMessage(results, insights, alerts);
+    if (message == null) {
       return;
     }
 
-    final message = _buildMessage(results, insights, alerts);
-    if (message == null || message == _lastMessage) {
+    final now = DateTime.now();
+    final bool isCartelMessage = message.startsWith('Cartel detectado');
+
+    if (!isCartelMessage && _shouldRespectCooldown(now)) {
+      return;
+    }
+
+    if (!isCartelMessage && message == _lastMessage) {
+      return;
+    }
+
+    if (isCartelMessage) {
+      await _safeStop();
+      await _speak(message);
       return;
     }
 
@@ -296,6 +310,14 @@ class VoiceAnnouncer {
     final filteredResults = insights.filteredResults.isNotEmpty
         ? insights.filteredResults
         : results;
+
+    final hasCartelDetection = filteredResults.any(
+      (result) => isCartelLabel(extractLabel(result)),
+    );
+
+    if (hasCartelDetection) {
+      return 'Cartel detectado.';
+    }
 
     if (filteredResults.isEmpty) {
       if (_lastMessage == null) {
