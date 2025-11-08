@@ -119,6 +119,9 @@ class VoiceAnnouncer {
   static const Duration _minimumPause = Duration(seconds: 3);
   static const double _closeDistanceThresholdMeters = 1.2;
   DateTime _lastAnnouncement = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastCartelAnnouncedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _cartelCooldown = Duration(seconds: 5);
+  bool _cartelWasPresent = false;
   String? _lastMessage;
   VoiceSettings _settings;
   bool _isPaused = false;
@@ -154,25 +157,19 @@ class VoiceAnnouncer {
 
     await _ensureConfigured();
 
-    final message = _buildMessage(results, insights, alerts);
+    final now = DateTime.now();
+    final message = _buildMessage(results, insights, alerts, now);
     if (message == null) {
       return;
     }
 
-    final now = DateTime.now();
-    final bool isCartelMessage = message.startsWith('Cartel detectado');
+    final bool isCartelMessage = message == 'Cartel detectado.';
 
     if (!isCartelMessage && _shouldRespectCooldown(now)) {
       return;
     }
 
     if (!isCartelMessage && message == _lastMessage) {
-      return;
-    }
-
-    if (isCartelMessage) {
-      await _safeStop();
-      await _speak(message);
       return;
     }
 
@@ -301,6 +298,7 @@ class VoiceAnnouncer {
     List<YOLOResult> results,
     ProcessedDetections insights,
     SafetyAlerts alerts,
+    DateTime now,
   ) {
     final alertMessages = alerts.toList();
     if (alertMessages.isNotEmpty) {
@@ -316,7 +314,18 @@ class VoiceAnnouncer {
     );
 
     if (hasCartelDetection) {
-      return 'Cartel detectado.';
+      final shouldAnnounceCartel = !_cartelWasPresent ||
+          now.difference(_lastCartelAnnouncedAt) > _cartelCooldown;
+      _cartelWasPresent = true;
+      if (shouldAnnounceCartel) {
+        _lastCartelAnnouncedAt = now;
+        return 'Cartel detectado.';
+      }
+      return null;
+    }
+
+    if (_cartelWasPresent) {
+      _cartelWasPresent = false;
     }
 
     if (filteredResults.isEmpty) {

@@ -267,14 +267,31 @@ class CameraInferenceController extends ChangeNotifier {
         processed.filteredResults.isNotEmpty) {
       final now = DateTime.now();
       if (now.difference(_lastOcrTimestamp).inMilliseconds > 1500) {
+        _setVoiceFeedbackPaused(true);
         _isOcrBusy = true;
         _lastOcrTimestamp = now;
+        Timer? voiceResumeTimer;
+
+        voiceResumeTimer = Timer(const Duration(seconds: 8), () {
+          if (_isDisposed) return;
+          if (_isVoiceFeedbackPaused) {
+            _setVoiceFeedbackPaused(false);
+          }
+        });
 
         unawaited(_runOcrOnDetections(originalImage, processed, now)
             .catchError((e) {
           debugPrint("Error ejecutando OCR: $e");
         }).whenComplete(() {
+          if (_isDisposed) {
+            voiceResumeTimer?.cancel();
+            return;
+          }
           _isOcrBusy = false;
+          voiceResumeTimer?.cancel();
+          if (_isVoiceFeedbackPaused) {
+            _setVoiceFeedbackPaused(false);
+          }
         }));
       }
     }

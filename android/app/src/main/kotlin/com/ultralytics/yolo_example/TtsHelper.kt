@@ -13,12 +13,12 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
     private val tts = TextToSpeech(context.applicationContext, this)
     private var ready = false
     private var lastSpeakTimestamp = 0L
-    private var pendingUtterance: String? = null
+    private var pendingUtterance: PendingUtterance? = null
 
     private val delayedSpeak = Runnable {
         val utterance = pendingUtterance ?: return@Runnable
         pendingUtterance = null
-        speakInternal(utterance)
+        speakInternal(utterance.text, utterance.flushQueue)
     }
 
     override fun onInit(status: Int) {
@@ -28,39 +28,44 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
             tts.language = locale
             tts.setSpeechRate(1.0f)
             val pending = pendingUtterance
-            if (!pending.isNullOrBlank()) {
+            if (pending != null && pending.text.isNotBlank()) {
                 pendingUtterance = null
-                speakInternal(pending)
+                speakInternal(pending.text, pending.flushQueue)
             }
         }
     }
 
-    fun speak(text: String) {
+    fun speak(text: String, flushQueue: Boolean = false) {
         if (text.isBlank()) return
         handler.post {
             if (!ready) {
-                pendingUtterance = text
+                pendingUtterance = PendingUtterance(text, flushQueue)
                 return@post
             }
             val now = SystemClock.elapsedRealtime()
             val elapsed = now - lastSpeakTimestamp
             if (elapsed < RATE_LIMIT_MS) {
-                pendingUtterance = text
+                pendingUtterance = PendingUtterance(text, flushQueue)
                 handler.removeCallbacks(delayedSpeak)
                 handler.postDelayed(delayedSpeak, RATE_LIMIT_MS - elapsed)
                 return@post
             }
-            speakInternal(text)
+            speakInternal(text, flushQueue)
         }
     }
 
-    private fun speakInternal(text: String) {
+    private fun speakInternal(text: String, flushQueue: Boolean = false) {
         if (!ready) {
-            pendingUtterance = text
+            pendingUtterance = PendingUtterance(text, flushQueue)
             return
         }
         lastSpeakTimestamp = SystemClock.elapsedRealtime()
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, text.hashCode().toString())
+        val queueMode = when {
+            flushQueue -> TextToSpeech.QUEUE_FLUSH
+            tts.isSpeaking -> TextToSpeech.QUEUE_ADD
+            else -> TextToSpeech.QUEUE_FLUSH
+        }
+        tts.speak(text, queueMode, null, text.hashCode().toString())
     }
 
     fun shutdown() {
@@ -73,4 +78,6 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
     companion object {
         private const val RATE_LIMIT_MS = 1200L
     }
+
+    private data class PendingUtterance(val text: String, val flushQueue: Boolean)
 }
