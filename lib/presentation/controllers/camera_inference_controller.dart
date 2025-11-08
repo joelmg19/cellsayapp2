@@ -447,7 +447,14 @@ class CameraInferenceController extends ChangeNotifier {
     final StringBuffer announcementBuilder = StringBuffer();
 
     for (final cartel in cartelDetections) {
-      final cartelRect = extractBoundingBox(cartel); // Rect de 0.0 a 1.0
+      final rawCartelRect = extractBoundingBox(cartel);
+      if (rawCartelRect == null) continue;
+
+      final cartelRect = _normalizedRect(
+        rawCartelRect,
+        imageWidth.toDouble(),
+        imageHeight.toDouble(),
+      );
       if (cartelRect == null) continue;
 
       final StringBuffer textoDelCartel = StringBuffer();
@@ -506,6 +513,42 @@ class CameraInferenceController extends ChangeNotifier {
     );
   }
   // --- FIN DE MODIFICACIÓN ---
+
+  Rect? _normalizedRect(Rect rect, double imageWidth, double imageHeight) {
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      return null;
+    }
+
+    const double tolerance = 1e-3;
+    final isAlreadyNormalized = rect.left >= -tolerance &&
+        rect.top >= -tolerance &&
+        rect.right <= 1.0 + tolerance &&
+        rect.bottom <= 1.0 + tolerance;
+
+    if (isAlreadyNormalized) {
+      return rect;
+    }
+
+    Rect scaled = Rect.fromLTRB(
+      rect.left / imageWidth,
+      rect.top / imageHeight,
+      rect.right / imageWidth,
+      rect.bottom / imageHeight,
+    );
+
+    scaled = Rect.fromLTRB(
+      scaled.left.clamp(0.0, 1.0),
+      scaled.top.clamp(0.0, 1.0),
+      scaled.right.clamp(0.0, 1.0),
+      scaled.bottom.clamp(0.0, 1.0),
+    );
+
+    if (scaled.width <= 0 || scaled.height <= 0) {
+      return null;
+    }
+
+    return scaled;
+  }
 
   void _annotateDistances(List<YOLOResult> results) {
     if (results.isEmpty) return;
