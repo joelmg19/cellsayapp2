@@ -425,7 +425,7 @@ class CameraInferenceController extends ChangeNotifier {
     final metadata = InputImageMetadata(
       size: ui.Size(imageWidth.toDouble(), imageHeight.toDouble()),
       rotation: InputImageRotation.rotation0deg, // La imagen decodificada ya está derecha
-      format: InputImageFormat.bgra8888, // Especificamos el formato que ML Kit espera
+      format: InputImageFormat.rgba8888, // Especificamos el formato que ML Kit espera
       bytesPerRow: imageWidth * 4, // 4 bytes por píxel (RGBA)
     );
 
@@ -1356,8 +1356,9 @@ class CameraInferenceController extends ChangeNotifier {
 
     await _voiceAnnouncer.speakMessage(
       message,
-      bypassCooldown: bypassCooldown,
+      bypassCooldown: bypassCooldown || force,
       ignorePause: force,
+      storeAsLastMessage: true,
     );
   }
 
