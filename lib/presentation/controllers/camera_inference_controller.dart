@@ -32,11 +32,13 @@ import '../../services/weather_service.dart';
 class CameraInferenceController extends ChangeNotifier {
   final TextRecognizer _textRecognizer = TextRecognizer();
   bool _isOcrBusy = false;
+  bool _isCaptureOcrActive = false;
   DateTime _lastOcrTimestamp = DateTime.now();
   String? _lastAnnouncedOcrMessage;
   DateTime? _lastAnnouncedOcrTimestamp;
   Uint8List? _cachedCartelImage;
   DateTime? _cachedCartelImageTimestamp;
+  Timer? _voiceResumeTimer;
 
   // --- VARIABLES ORIGINALES ---
   int _detectionCount = 0;
@@ -260,39 +262,30 @@ class CameraInferenceController extends ChangeNotifier {
       notifyListeners();
     }
 
-    // --- Lógica de OCR ---
+    // --- Lógica de OCR (modo captura) ---
     if (_selectedModel == ModelType.LectorCarteles &&
         originalImage != null &&
         !_isOcrBusy &&
+        !_isCaptureOcrActive &&
         processed.filteredResults.isNotEmpty) {
       final now = DateTime.now();
       if (now.difference(_lastOcrTimestamp).inMilliseconds > 1500) {
+        _lastOcrTimestamp = now;
         _setVoiceFeedbackPaused(true);
         _isOcrBusy = true;
-        _lastOcrTimestamp = now;
-        Timer? voiceResumeTimer;
+        _isCaptureOcrActive = true;
 
-        voiceResumeTimer = Timer(const Duration(seconds: 8), () {
+        _voiceResumeTimer?.cancel();
+        _voiceResumeTimer = Timer(const Duration(seconds: 8), () {
           if (_isDisposed) return;
           if (_isVoiceFeedbackPaused) {
             _setVoiceFeedbackPaused(false);
           }
         });
 
-        unawaited(_runOcrOnDetections(originalImage, processed, now)
-            .catchError((e) {
-          debugPrint("Error ejecutando OCR: $e");
-        }).whenComplete(() {
-          if (_isDisposed) {
-            voiceResumeTimer?.cancel();
-            return;
-          }
-          _isOcrBusy = false;
-          voiceResumeTimer?.cancel();
-          if (_isVoiceFeedbackPaused) {
-            _setVoiceFeedbackPaused(false);
-          }
-        }));
+        unawaited(
+          _captureAndReadSign(originalImage, processed, now),
+        );
       }
     }
     // --- Fin Lógica de OCR ---
@@ -382,137 +375,131 @@ class CameraInferenceController extends ChangeNotifier {
     onDetectionResults(results, originalImage);
   }
 
-  // --- INICIO DE MODIFICACIÓN (Función de OCR corregida) ---
-  /// Ejecuta el OCR sobre la imagen y anuncia los resultados
-  Future<void> _runOcrOnDetections(
-      Uint8List imageBytes, // Esto es un JPEG comprimido
-      ProcessedDetections processed,
-      DateTime detectionTime,
-      ) async {
+  Future<void> _captureAndReadSign(
+    Uint8List imageBytes,
+    ProcessedDetections processed,
+    DateTime detectionTime,
+  ) async {
     if (_isDisposed) return;
 
-    final cartelDetections = processed.filteredResults
-        .where((d) => isCartelLabel(extractLabel(d)))
-        .toList();
+    try {
+      final cartelDetections = processed.filteredResults
+          .where((d) => isCartelLabel(extractLabel(d)))
+          .toList();
 
-    if (cartelDetections.isEmpty) return;
+      if (cartelDetections.isEmpty) {
+        return;
+      }
 
-    _cachedCartelImage = Uint8List.fromList(imageBytes);
-    _cachedCartelImageTimestamp = detectionTime;
-    notifyListeners();
+      _cachedCartelImage = Uint8List.fromList(imageBytes);
+      _cachedCartelImageTimestamp = detectionTime;
+      if (!_isDisposed) {
+        notifyListeners();
+      }
 
-    // --- (Decodificar JPEG) ---
+      final img.Image? decoded = await compute(img.decodeImage, imageBytes);
+      if (decoded == null) {
+        debugPrint('OCR capture error: failed to decode image.');
+        return;
+      }
+      if (_isDisposed) return;
 
-    // 1. Decodificar la imagen JPEG en memoria
-    // Usamos compute para hacerlo en un Isolate separado y no bloquear la UI
-    final img.Image? decodedImage = await compute(img.decodeImage, imageBytes);
+      final rawRgbaBytes = decoded.toUint8List();
+      final int w = decoded.width;
+      final int h = decoded.height;
 
-    if (decodedImage == null) {
-      debugPrint("OCR Error: No se pudo decodificar la imagen JPEG.");
-      return;
-    }
-    if (_isDisposed) return; // Comprobar de nuevo después del 'await'
-
-    // 2. Obtener los bytes crudos en formato RGBA
-    // --- INICIO DE CORRECCIÓN (toUint8List) ---
-    // Esta es la forma correcta de obtener los bytes RGBA crudos en image: 4.x
-    final Uint8List rawRgbaBytes = decodedImage.toUint8List();
-    // --- FIN DE CORRECCIÓN (toUint8List) ---
-    final int imageWidth = decodedImage.width;
-    final int imageHeight = decodedImage.height;
-
-    // 3. Crear la metadata para la imagen cruda (RAW)
-    final metadata = InputImageMetadata(
-      size: ui.Size(imageWidth.toDouble(), imageHeight.toDouble()),
-      rotation: InputImageRotation.rotation0deg, // La imagen decodificada ya está derecha
-      format: InputImageFormat.bgra8888, // Especificamos el formato que ML Kit espera
-      bytesPerRow: imageWidth * 4, // 4 bytes por píxel (BGRA)
-    );
-
-    // 4. Crear el InputImage desde los bytes crudos (rawRgbaBytes)
-    final inputImage = InputImage.fromBytes(
-      bytes: rawRgbaBytes,
-      metadata: metadata,
-    );
-
-    // --- (Fin Decodificar JPEG) ---
-
-    // 5. Procesar la imagen completa para OCR
-    final RecognizedText recognizedText =
-        await _textRecognizer.processImage(inputImage);
-
-    if (_isDisposed) return;
-
-    // 6. Mapear texto a carteles
-    final StringBuffer announcementBuilder = StringBuffer();
-
-    for (final cartel in cartelDetections) {
-      final rawCartelRect = extractBoundingBox(cartel);
-      if (rawCartelRect == null) continue;
-
-      final cartelRect = _normalizedRect(
-        rawCartelRect,
-        imageWidth.toDouble(),
-        imageHeight.toDouble(),
+      final metadata = InputImageMetadata(
+        size: ui.Size(w.toDouble(), h.toDouble()),
+        rotation: InputImageRotation.rotation0deg,
+        format: InputImageFormat.bgra8888,
+        bytesPerRow: w * 4,
       );
-      if (cartelRect == null) continue;
 
-      final StringBuffer textoDelCartel = StringBuffer();
-      for (final block in recognizedText.blocks) {
-        // Convertir BoundingBox de MLKit (pixeles) a Rect normalizado
-        final blockRect = Rect.fromLTWH(
-          block.boundingBox.left / imageWidth,
-          block.boundingBox.top / imageHeight,
-          block.boundingBox.width / imageWidth,
-          block.boundingBox.height / imageHeight,
+      final input = InputImage.fromBytes(
+        bytes: rawRgbaBytes,
+        metadata: metadata,
+      );
+
+      final recognized = await _textRecognizer.processImage(input);
+      if (_isDisposed) return;
+
+      final buffer = StringBuffer();
+      for (final cartel in cartelDetections) {
+        final rawCartelRect = extractBoundingBox(cartel);
+        if (rawCartelRect == null) continue;
+
+        final rect = _normalizedRect(
+          rawCartelRect,
+          w.toDouble(),
+          h.toDouble(),
         );
+        if (rect == null) continue;
 
-        // 7. Comprobar si el texto está (parcialmente) dentro del cartel
-        if (cartelRect.overlaps(blockRect)) {
-          textoDelCartel
-            ..write(block.text.replaceAll('\n', ' '))
-            ..write(' ');
+        final textBuffer = StringBuffer();
+        for (final block in recognized.blocks) {
+          final blockRect = Rect.fromLTWH(
+            block.boundingBox.left / w,
+            block.boundingBox.top / h,
+            block.boundingBox.width / w,
+            block.boundingBox.height / h,
+          );
+          if (rect.overlaps(blockRect)) {
+            textBuffer
+              ..write(block.text.replaceAll('\n', ' '))
+              ..write(' ');
+          }
+        }
+
+        final text = textBuffer.toString().trim();
+        if (text.isNotEmpty) {
+          buffer
+            ..write('Cartel detectado. ')
+            ..write('Dice: ')
+            ..write(text)
+            ..write('. ');
         }
       }
 
-      final textoCartel = textoDelCartel.toString().trim();
-      if (textoCartel.isNotEmpty) {
-        // 8. Combinar el anuncio (usando extractLabel)
-        announcementBuilder
-          ..write('Cartel detectado. ')
-          ..write('Dice: ')
-          ..write(textoCartel)
-          ..write('. ');
+      final announcement = buffer.toString().trim();
+      if (announcement.isEmpty) {
+        return;
+      }
+
+      final now = DateTime.now();
+      if (_lastAnnouncedOcrMessage == announcement &&
+          _lastAnnouncedOcrTimestamp != null &&
+          now.difference(_lastAnnouncedOcrTimestamp!) <
+              const Duration(seconds: 10)) {
+        return;
+      }
+
+      _lastAnnouncedOcrMessage = announcement;
+      _lastAnnouncedOcrTimestamp = now;
+
+      await _announceSystemMessage(
+        announcement,
+        force: true,
+        bypassCooldown: true,
+      );
+    } catch (e) {
+      debugPrint('OCR capture error: $e');
+    } finally {
+      _isOcrBusy = false;
+      _isCaptureOcrActive = false;
+      _voiceResumeTimer?.cancel();
+      _voiceResumeTimer = null;
+      if (_isVoiceFeedbackPaused) {
+        if (_isDisposed) {
+          _isVoiceFeedbackPaused = false;
+        } else {
+          _setVoiceFeedbackPaused(false);
+        }
+      }
+      if (!_isDisposed) {
+        notifyListeners();
       }
     }
-
-    final ocrAnnouncement = announcementBuilder.toString().trim();
-
-    if (ocrAnnouncement.isEmpty) {
-      return;
-    }
-
-    final now = DateTime.now();
-    final lastMessage = _lastAnnouncedOcrMessage;
-    final lastTimestamp = _lastAnnouncedOcrTimestamp;
-
-    if (lastMessage != null &&
-        lastTimestamp != null &&
-        lastMessage == ocrAnnouncement &&
-        now.difference(lastTimestamp) < const Duration(seconds: 10)) {
-      return;
-    }
-
-    _lastAnnouncedOcrMessage = ocrAnnouncement;
-    _lastAnnouncedOcrTimestamp = now;
-
-    await _announceSystemMessage(
-      ocrAnnouncement,
-      force: true,
-      bypassCooldown: true,
-    );
   }
-  // --- FIN DE MODIFICACIÓN ---
 
   Rect? _normalizedRect(Rect rect, double imageWidth, double imageHeight) {
     if (imageWidth <= 0 || imageHeight <= 0) {
@@ -1416,6 +1403,8 @@ class CameraInferenceController extends ChangeNotifier {
     _isDisposed = true;
     _voiceAnnouncer.dispose();
     _statusTimer?.cancel();
+    _voiceResumeTimer?.cancel();
+    _voiceResumeTimer = null;
     unawaited(_voiceCommandService.dispose());
     _weatherService.dispose();
     unawaited(_depthService?.dispose());
