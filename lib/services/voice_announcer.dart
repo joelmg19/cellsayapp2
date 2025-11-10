@@ -281,11 +281,8 @@ class VoiceAnnouncer {
   Future<void> _playSpeech(_PendingSpeech request) async {
     _isSpeaking = true;
     try {
-      final dynamic speakingResult = await _tts.isSpeaking;
-      final bool isAlreadySpeaking = speakingResult == true;
-      final queueMode = isAlreadySpeaking ? 1 : 0;
       try {
-        await _tts.setQueueMode(queueMode);
+        await _tts.setQueueMode(0);
       } catch (_) {}
       await _tts.speak(request.message);
       _lastAnnouncement = DateTime.now();
