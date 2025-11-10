@@ -138,6 +138,26 @@ class VoiceAnnouncer {
       await _tts.setPitch(validSettings.pitch);
       await _tts.setVolume(validSettings.volume);
       await _tts.awaitSpeakCompletion(true);
+      try {
+        _tts.setStartHandler(() {
+          _isSpeaking = true;
+        });
+      } catch (_) {}
+      try {
+        _tts.setCompletionHandler(() {
+          _isSpeaking = false;
+        });
+      } catch (_) {}
+      try {
+        _tts.setCancelHandler(() {
+          _isSpeaking = false;
+        });
+      } catch (_) {}
+      try {
+        _tts.setErrorHandler((msg) {
+          _isSpeaking = false;
+        });
+      } catch (_) {}
       await _disableExclusiveAudioFocus();
     } catch (_) {
       // Ignore configuration errors to avoid crashing voice flow.
@@ -282,7 +302,7 @@ class VoiceAnnouncer {
     _isSpeaking = true;
     try {
       try {
-        await _tts.setQueueMode(0);
+        await _tts.setQueueMode(1);
       } catch (_) {}
       await _tts.speak(request.message);
       _lastAnnouncement = DateTime.now();
