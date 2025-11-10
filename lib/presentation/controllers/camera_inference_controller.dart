@@ -1,6 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui; // Import para ui.Size
+import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart'
     hide ModelManager;
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
@@ -397,31 +400,31 @@ class CameraInferenceController extends ChangeNotifier {
         notifyListeners();
       }
 
+      final tempDir = await getTemporaryDirectory();
+      if (_isDisposed) return;
+
+      final filePath = path.join(
+        tempDir.path,
+        'cartel_${detectionTime.millisecondsSinceEpoch}.jpg',
+      );
+      final file = File(filePath);
+      await file.writeAsBytes(imageBytes, flush: true);
+      if (_isDisposed) return;
+
+      final input = InputImage.fromFilePath(filePath);
+
+      final recognized = await _textRecognizer.processImage(input);
+      if (_isDisposed) return;
+
       final img.Image? decoded = await compute(img.decodeImage, imageBytes);
       if (decoded == null) {
-        debugPrint('OCR capture error: failed to decode image.');
+        debugPrint('OCR capture error: failed to decode image size.');
         return;
       }
       if (_isDisposed) return;
 
-      final rawRgbaBytes = decoded.toUint8List();
       final int w = decoded.width;
       final int h = decoded.height;
-
-      final metadata = InputImageMetadata(
-        size: ui.Size(w.toDouble(), h.toDouble()),
-        rotation: InputImageRotation.rotation0deg,
-        format: InputImageFormat.bgra8888,
-        bytesPerRow: w * 4,
-      );
-
-      final input = InputImage.fromBytes(
-        bytes: rawRgbaBytes,
-        metadata: metadata,
-      );
-
-      final recognized = await _textRecognizer.processImage(input);
-      if (_isDisposed) return;
 
       final buffer = StringBuffer();
       for (final cartel in cartelDetections) {
