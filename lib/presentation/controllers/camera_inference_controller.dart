@@ -464,26 +464,39 @@ class CameraInferenceController extends ChangeNotifier {
       }
 
       final announcement = buffer.toString().trim();
-      if (announcement.isEmpty) {
-        return;
-      }
+      final safeAnnouncement = announcement.isNotEmpty
+          ? announcement
+          : recognized.text.replaceAll('\n', ' ').trim();
+
+      final String finalAnnouncement = safeAnnouncement.isNotEmpty
+          ? 'Cartel detectado. Dice: $safeAnnouncement'
+          : 'Cartel detectado, pero no se pudo leer texto.';
+      final trimmedAnnouncement = finalAnnouncement.trim();
+
+      debugPrint(
+        'OCR/VOICE -> finalAnnouncement="$trimmedAnnouncement" (len=${trimmedAnnouncement.length})',
+      );
 
       final now = DateTime.now();
-      if (_lastAnnouncedOcrMessage == announcement &&
+      if (_lastAnnouncedOcrMessage == trimmedAnnouncement &&
           _lastAnnouncedOcrTimestamp != null &&
           now.difference(_lastAnnouncedOcrTimestamp!) <
               const Duration(seconds: 10)) {
+        debugPrint(
+          'OCR/VOICE -> bloqueado por antispam (mismo mensaje <10s).',
+        );
         return;
       }
 
-      _lastAnnouncedOcrMessage = announcement;
+      _lastAnnouncedOcrMessage = trimmedAnnouncement;
       _lastAnnouncedOcrTimestamp = now;
 
       await _announceSystemMessage(
-        announcement,
+        trimmedAnnouncement,
         force: true,
         bypassCooldown: true,
       );
+      debugPrint('OCR/VOICE -> speak enqueued');
     } catch (e) {
       debugPrint('OCR capture error: $e');
     } finally {

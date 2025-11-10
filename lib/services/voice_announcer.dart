@@ -1,5 +1,6 @@
 
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../core/tts/tts_helpers.dart';
@@ -149,9 +150,14 @@ class VoiceAnnouncer {
     ProcessedDetections insights = ProcessedDetections.empty,
     SafetyAlerts alerts = const SafetyAlerts(),
   }) async {
-    if (!isVoiceEnabled || _isPaused) {
+    if (!isVoiceEnabled) {
       _lastMessage = null;
       unawaited(_safeStop());
+      return;
+    }
+
+    if (_isPaused) {
+      _lastMessage = null;
       return;
     }
 
@@ -182,9 +188,6 @@ class VoiceAnnouncer {
     if (_isPaused == value) return;
     _isPaused = value;
     _lastMessage = null;
-    if (value) {
-      unawaited(_safeStop());
-    }
   }
 
   Future<void> updateSettings(VoiceSettings settings) async {
@@ -237,6 +240,7 @@ class VoiceAnnouncer {
       message,
       storeAsLastMessage: storeAsLastMessage,
     );
+    debugPrint('VoiceAnnouncer -> speak enqueued (len=${message.length})');
   }
 
   Future<void> _safeStop() async {
@@ -277,6 +281,12 @@ class VoiceAnnouncer {
   Future<void> _playSpeech(_PendingSpeech request) async {
     _isSpeaking = true;
     try {
+      final dynamic speakingResult = await _tts.isSpeaking;
+      final bool isAlreadySpeaking = speakingResult == true;
+      final queueMode = isAlreadySpeaking ? 1 : 0;
+      try {
+        await _tts.setQueueMode(queueMode);
+      } catch (_) {}
       await _tts.speak(request.message);
       _lastAnnouncement = DateTime.now();
       if (request.storeAsLastMessage) {

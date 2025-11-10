@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import java.util.Locale
 
 /** Simple Text-to-Speech helper with a 1200ms rate limit. */
@@ -21,12 +23,31 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
         speakInternal(utterance.text, utterance.flushQueue)
     }
 
+    private val progressListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String) {
+            Log.d(TAG, "TTS onStart id=$utteranceId")
+        }
+
+        override fun onDone(utteranceId: String) {
+            Log.d(TAG, "TTS onDone id=$utteranceId")
+        }
+
+        override fun onError(utteranceId: String) {
+            Log.e(TAG, "TTS onError id=$utteranceId")
+        }
+
+        override fun onError(utteranceId: String, errorCode: Int) {
+            Log.e(TAG, "TTS onError id=$utteranceId code=$errorCode")
+        }
+    }
+
     override fun onInit(status: Int) {
         ready = status == TextToSpeech.SUCCESS
         if (ready) {
             val locale = tts.voice?.locale ?: Locale.getDefault()
             tts.language = locale
             tts.setSpeechRate(1.0f)
+            tts.setOnUtteranceProgressListener(progressListener)
             val pending = pendingUtterance
             if (pending != null && pending.text.isNotBlank()) {
                 pendingUtterance = null
@@ -61,10 +82,11 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
         }
         lastSpeakTimestamp = SystemClock.elapsedRealtime()
         val queueMode = when {
-            flushQueue -> TextToSpeech.QUEUE_FLUSH
+            flushQueue && !tts.isSpeaking -> TextToSpeech.QUEUE_FLUSH
             tts.isSpeaking -> TextToSpeech.QUEUE_ADD
             else -> TextToSpeech.QUEUE_FLUSH
         }
+        Log.d(TAG, "TTS speakInternal queueMode=$queueMode len=${text.length}")
         tts.speak(text, queueMode, null, text.hashCode().toString())
     }
 
@@ -77,6 +99,7 @@ class TtsHelper(context: Context) : TextToSpeech.OnInitListener {
 
     companion object {
         private const val RATE_LIMIT_MS = 1200L
+        private const val TAG = "CellsayTTS"
     }
 
     private data class PendingUtterance(val text: String, val flushQueue: Boolean)
