@@ -1528,7 +1528,7 @@ class CameraInferenceController extends ChangeNotifier {
     await _voiceAnnouncer.speakMessage(
       message,
       bypassCooldown: bypassCooldown || force,
-      ignorePause: force,
+      ignorePause: true,
       storeAsLastMessage: storeAsLastMessage,
     );
   }
