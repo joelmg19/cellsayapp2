@@ -92,6 +92,9 @@ class CameraInferenceController extends ChangeNotifier {
   DateTime _lastWeatherFetch = DateTime.fromMillisecondsSinceEpoch(0);
   String? _connectionAlert;
   String? _cameraAlert;
+  bool _suppressGenericCartelAnnouncements = false;
+  DateTime? _cartelLastSeen;
+  static const Duration _cartelAbsenceGrace = Duration(milliseconds: 1200);
   // --- FIN DE VARIABLES ORIGINALES ---
 
   // --- GETTERS ORIGINALES ---
@@ -216,6 +219,22 @@ class CameraInferenceController extends ChangeNotifier {
       (d) => isCartelLabel(extractLabel(d)),
     );
 
+    if (_selectedModel == ModelType.LectorCarteles) {
+      if (hasCartelDetections) {
+        _cartelLastSeen = now;
+        _suppressGenericCartelAnnouncements = true;
+      } else {
+        final last = _cartelLastSeen;
+        if (last != null && now.difference(last) > _cartelAbsenceGrace) {
+          _suppressGenericCartelAnnouncements = false;
+          _cartelLastSeen = null;
+        }
+      }
+    } else {
+      _suppressGenericCartelAnnouncements = false;
+      _cartelLastSeen = null;
+    }
+
     bool shouldNotify = false;
     if (_selectedModel == ModelType.LectorCarteles) {
       if (!hasCartelDetections) {
@@ -296,7 +315,10 @@ class CameraInferenceController extends ChangeNotifier {
     unawaited(
       _voiceAnnouncer.processDetections(
         filtered,
-        isVoiceEnabled: _isVoiceEnabled && !_isVoiceFeedbackPaused,
+        isVoiceEnabled: _isVoiceEnabled &&
+            !_isVoiceFeedbackPaused &&
+            !(_selectedModel == ModelType.LectorCarteles &&
+                _suppressGenericCartelAnnouncements),
         insights: processed,
         alerts: _safetyAlerts,
       ),
