@@ -121,7 +121,7 @@ class VoiceAnnouncer {
   static const double _closeDistanceThresholdMeters = 1.2;
   DateTime _lastAnnouncement = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastCartelAnnouncedAt = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _cartelCooldown = Duration(seconds: 5);
+  static const Duration _cartelCooldown = Duration(seconds: 8);
   bool _cartelWasPresent = false;
   String? _lastMessage;
   VoiceSettings _settings;

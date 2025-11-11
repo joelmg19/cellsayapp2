@@ -38,9 +38,9 @@ class CameraInferenceController extends ChangeNotifier {
   bool _isOcrBusy = false;
   bool _isCaptureOcrActive = false;
   DateTime _lastOcrTimestamp = DateTime.now();
-  String? _lastAnnouncedOcrMessage;
-  DateTime? _lastAnnouncedOcrTimestamp;
-  String? _lastAnnouncedOcrTextNormalized;
+  static const Duration _ocrRepeatCooldown = Duration(seconds: 8);
+  String? _lastOcrTextNorm;
+  DateTime _lastOcrSpokenAt = DateTime.fromMillisecondsSinceEpoch(0);
   Uint8List? _cachedCartelImage;
   DateTime? _cachedCartelImageTimestamp;
   Timer? _voiceResumeTimer;
@@ -363,13 +363,14 @@ class CameraInferenceController extends ChangeNotifier {
     }
     // --- Fin Lógica de OCR ---
 
+    final bool isVoiceActive = _isVoiceEnabled &&
+        !(_selectedModel == ModelType.LectorCarteles &&
+            _suppressGenericCartelAnnouncements);
+
     unawaited(
       _voiceAnnouncer.processDetections(
         filtered,
-        isVoiceEnabled: _isVoiceEnabled &&
-            !_isVoiceFeedbackPaused &&
-            !(_selectedModel == ModelType.LectorCarteles &&
-                _suppressGenericCartelAnnouncements),
+        isVoiceEnabled: isVoiceActive,
         insights: processed,
         alerts: _safetyAlerts,
       ),
@@ -541,45 +542,36 @@ class CameraInferenceController extends ChangeNotifier {
       final safeAnnouncement =
           ocrText.isNotEmpty ? ocrText : recognizedFallback;
 
-      final String finalAnnouncement = safeAnnouncement.isNotEmpty
-          ? 'Cartel detectado. Dice: $safeAnnouncement'
-          : 'Cartel detectado, pero no pude leer texto.';
-      final trimmedAnnouncement = finalAnnouncement.trim();
+      final String ocrTextOnly = safeAnnouncement;
+      final String norm = _normOcr(ocrTextOnly);
 
-      final normalizedOcrText = _normalizeOcrText(safeAnnouncement);
-      final hasMeaningfulText = normalizedOcrText.isNotEmpty;
-
-      debugPrint(
-        'OCR/VOICE -> finalAnnouncement="$trimmedAnnouncement" (len=${trimmedAnnouncement.length})',
-      );
-
-      final now = DateTime.now();
-      final bool recentlyAnnounced = _lastAnnouncedOcrTimestamp != null &&
-          now.difference(_lastAnnouncedOcrTimestamp!) <
-              const Duration(seconds: 10);
-
-      final bool isDuplicateMeaningfulText = hasMeaningfulText &&
-          _lastAnnouncedOcrTextNormalized != null &&
-          normalizedOcrText == _lastAnnouncedOcrTextNormalized;
-
-      final bool isDuplicateMessage = !hasMeaningfulText &&
-          _lastAnnouncedOcrMessage == trimmedAnnouncement;
-
-      if (recentlyAnnounced &&
-          (isDuplicateMeaningfulText || isDuplicateMessage)) {
-        debugPrint(
-          'OCR/VOICE -> bloqueado por antispam (mismo mensaje <10s).',
-        );
+      if (norm.isEmpty) {
+        debugPrint('OCR/VOICE -> texto vacío tras normalizar, no se anuncia.');
         return;
       }
 
-      _lastAnnouncedOcrMessage = trimmedAnnouncement;
-      _lastAnnouncedOcrTimestamp = now;
-      _lastAnnouncedOcrTextNormalized =
-          hasMeaningfulText ? normalizedOcrText : null;
+      final String finalAnnouncement =
+          'Cartel detectado. Dice: $ocrTextOnly'.trim();
+
+      final now = DateTime.now();
+      final bool sameText = norm == _lastOcrTextNorm;
+      final bool underCooldown =
+          now.difference(_lastOcrSpokenAt) < _ocrRepeatCooldown;
+
+      if (sameText && underCooldown) {
+        debugPrint('OCR/VOICE -> bloqueado por cooldown de 8s para mismo texto.');
+        return;
+      }
+
+      _lastOcrTextNorm = norm;
+      _lastOcrSpokenAt = now;
+
+      debugPrint(
+        'OCR/VOICE -> finalAnnouncement="$finalAnnouncement" (len=${finalAnnouncement.length})',
+      );
 
       await _announceSystemMessage(
-        trimmedAnnouncement,
+        finalAnnouncement,
         force: true,
         bypassCooldown: true,
         storeAsLastMessage: false,
@@ -670,12 +662,8 @@ class CameraInferenceController extends ChangeNotifier {
     return scaled;
   }
 
-  String _normalizeOcrText(String text) {
-    return text
-        .replaceAll('\n', ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-  }
+  String _normOcr(String s) =>
+      s.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
 
   void _annotateDistances(List<YOLOResult> results) {
     if (results.isEmpty) return;
@@ -1537,6 +1525,7 @@ class CameraInferenceController extends ChangeNotifier {
     if (_isVoiceFeedbackPaused == value) return;
     _isVoiceFeedbackPaused = value;
     _voiceAnnouncer.setPaused(value);
+    notifyListeners();
   }
 
   @override
