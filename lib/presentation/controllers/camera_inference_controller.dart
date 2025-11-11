@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show Rect;
 
@@ -95,6 +96,11 @@ class CameraInferenceController extends ChangeNotifier {
   bool _suppressGenericCartelAnnouncements = false;
   DateTime? _cartelLastSeen;
   static const Duration _cartelAbsenceGrace = Duration(milliseconds: 1200);
+  Rect? _lastCartelRect;
+  String? _lastCartelLabel;
+  DateTime _lastCartelChange = DateTime.fromMillisecondsSinceEpoch(0);
+
+  static const double _cartelNewIouThreshold = 0.30;
   // --- FIN DE VARIABLES ORIGINALES ---
 
   // --- GETTERS ORIGINALES ---
@@ -219,6 +225,45 @@ class CameraInferenceController extends ChangeNotifier {
       (d) => isCartelLabel(extractLabel(d)),
     );
 
+    if (_selectedModel == ModelType.LectorCarteles && hasCartelDetections) {
+      final primary = _pickPrimaryCartel(filtered);
+      if (primary != null) {
+        final rect = extractBoundingBox(primary);
+        if (rect != null) {
+          final Rect normalized = _normalizedRect(rect, 1.0, 1.0) ?? rect;
+          final String label = extractLabel(primary);
+
+          final lastRect = _lastCartelRect;
+          final lastLabel = _lastCartelLabel;
+
+          bool isNew = false;
+          if (lastRect == null ||
+              lastLabel == null ||
+              _lastCartelChange == DateTime.fromMillisecondsSinceEpoch(0)) {
+            isNew = true;
+          } else {
+            final iou = _iou(normalized, lastRect);
+            if (label != lastLabel || iou < _cartelNewIouThreshold) {
+              isNew = true;
+            }
+          }
+
+          if (isNew) {
+            _lastCartelRect = normalized;
+            _lastCartelLabel = label;
+            _lastCartelChange = now;
+
+            _lastAnnouncedOcrMessage = null;
+            _lastAnnouncedOcrTimestamp = null;
+
+            _lastOcrTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
+          } else {
+            _lastCartelRect = normalized;
+          }
+        }
+      }
+    }
+
     if (_selectedModel == ModelType.LectorCarteles) {
       if (hasCartelDetections) {
         _cartelLastSeen = now;
@@ -242,6 +287,9 @@ class CameraInferenceController extends ChangeNotifier {
         _cachedCartelImageTimestamp = null;
         _lastAnnouncedOcrMessage = null;
         _lastAnnouncedOcrTimestamp = null;
+        _lastCartelRect = null;
+        _lastCartelLabel = null;
+        _lastCartelChange = DateTime.fromMillisecondsSinceEpoch(0);
         shouldNotify = true;
       }
     }
@@ -537,6 +585,35 @@ class CameraInferenceController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  double _iou(Rect a, Rect b) {
+    final double ix1 = math.max(a.left, b.left);
+    final double iy1 = math.max(a.top, b.top);
+    final double ix2 = math.min(a.right, b.right);
+    final double iy2 = math.min(a.bottom, b.bottom);
+    final double iw = math.max(0.0, ix2 - ix1);
+    final double ih = math.max(0.0, iy2 - iy1);
+    final double inter = iw * ih;
+    if (inter <= 0) return 0.0;
+    final double union = a.width * a.height + b.width * b.height - inter;
+    if (union <= 0) return 0.0;
+    return inter / union;
+  }
+
+  YOLOResult? _pickPrimaryCartel(List<YOLOResult> results) {
+    YOLOResult? best;
+    double bestScore = -1;
+    for (final r in results) {
+      final label = extractLabel(r);
+      if (!isCartelLabel(label)) continue;
+      final s = r.confidence ?? 0.0;
+      if (s > bestScore) {
+        bestScore = s;
+        best = r;
+      }
+    }
+    return best;
   }
 
   Rect? _normalizedRect(Rect rect, double imageWidth, double imageHeight) {
