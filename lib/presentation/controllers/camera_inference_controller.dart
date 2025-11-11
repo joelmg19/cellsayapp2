@@ -38,8 +38,10 @@ class CameraInferenceController extends ChangeNotifier {
   bool _isOcrBusy = false;
   bool _isCaptureOcrActive = false;
   DateTime _lastOcrTimestamp = DateTime.now();
+
+  // --- Anti-spam OCR (8s) ---
   static const Duration _ocrRepeatCooldown = Duration(seconds: 8);
-  String? _lastOcrTextNorm;
+  String? _lastOcrTextNorm; // último texto OCR normalizado anunciado
   DateTime _lastOcrSpokenAt = DateTime.fromMillisecondsSinceEpoch(0);
   Uint8List? _cachedCartelImage;
   DateTime? _cachedCartelImageTimestamp;
@@ -254,9 +256,8 @@ class CameraInferenceController extends ChangeNotifier {
             _lastCartelLabel = label;
             _lastCartelChange = now;
 
-            _lastAnnouncedOcrMessage = null;
-            _lastAnnouncedOcrTimestamp = null;
-            _lastAnnouncedOcrTextNormalized = null;
+            _lastOcrTextNorm = null;
+            _lastOcrSpokenAt = DateTime.fromMillisecondsSinceEpoch(0);
 
             _lastOcrTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
           } else {
@@ -287,9 +288,8 @@ class CameraInferenceController extends ChangeNotifier {
       if (!hasCartelDetections) {
         _cachedCartelImage = null;
         _cachedCartelImageTimestamp = null;
-        _lastAnnouncedOcrMessage = null;
-        _lastAnnouncedOcrTimestamp = null;
-        _lastAnnouncedOcrTextNormalized = null;
+        _lastOcrTextNorm = null;
+        _lastOcrSpokenAt = DateTime.fromMillisecondsSinceEpoch(0);
         _lastCartelRect = null;
         _lastCartelLabel = null;
         _lastCartelChange = DateTime.fromMillisecondsSinceEpoch(0);
@@ -367,14 +367,16 @@ class CameraInferenceController extends ChangeNotifier {
         !(_selectedModel == ModelType.LectorCarteles &&
             _suppressGenericCartelAnnouncements);
 
-    unawaited(
-      _voiceAnnouncer.processDetections(
-        filtered,
-        isVoiceEnabled: isVoiceActive,
-        insights: processed,
-        alerts: _safetyAlerts,
-      ),
-    );
+    if (!_isVoiceFeedbackPaused || !isVoiceActive) {
+      unawaited(
+        _voiceAnnouncer.processDetections(
+          filtered,
+          isVoiceEnabled: isVoiceActive,
+          insights: processed,
+          alerts: _safetyAlerts,
+        ),
+      );
+    }
   }
 
   /// Handle performance metrics
@@ -543,15 +545,13 @@ class CameraInferenceController extends ChangeNotifier {
           ocrText.isNotEmpty ? ocrText : recognizedFallback;
 
       final String ocrTextOnly = safeAnnouncement;
+      // Suponiendo que tienes `ocrTextOnly` con SOLO el texto reconocido (sin prefijos).
       final String norm = _normOcr(ocrTextOnly);
 
       if (norm.isEmpty) {
         debugPrint('OCR/VOICE -> texto vacío tras normalizar, no se anuncia.');
         return;
       }
-
-      final String finalAnnouncement =
-          'Cartel detectado. Dice: $ocrTextOnly'.trim();
 
       final now = DateTime.now();
       final bool sameText = norm == _lastOcrTextNorm;
@@ -565,6 +565,8 @@ class CameraInferenceController extends ChangeNotifier {
 
       _lastOcrTextNorm = norm;
       _lastOcrSpokenAt = now;
+
+      final String finalAnnouncement = 'Cartel detectado. Dice: $norm';
 
       debugPrint(
         'OCR/VOICE -> finalAnnouncement="$finalAnnouncement" (len=${finalAnnouncement.length})',
@@ -1506,25 +1508,26 @@ class CameraInferenceController extends ChangeNotifier {
   }
 
   Future<void> _announceSystemMessage(
-      String message, {
-        bool force = false,
-        bool bypassCooldown = false,
-        bool storeAsLastMessage = true,
-      }) async {
+    String message, {
+    bool force = false,
+    bool bypassCooldown = false,
+    bool storeAsLastMessage = true,
+  }) async {
     if (!force && !_isVoiceEnabled) return;
 
     await _voiceAnnouncer.speakMessage(
       message,
-      bypassCooldown: bypassCooldown || force,
-      ignorePause: true,
+      force: force,
+      bypassCooldown: bypassCooldown,
       storeAsLastMessage: storeAsLastMessage,
+      ignorePause: true,
     );
   }
 
   void _setVoiceFeedbackPaused(bool value) {
     if (_isVoiceFeedbackPaused == value) return;
     _isVoiceFeedbackPaused = value;
-    _voiceAnnouncer.setPaused(value);
+    // No hacer stop del TTS aquí
     notifyListeners();
   }
 
