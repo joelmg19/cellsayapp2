@@ -1,6 +1,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import '../core/tts/tts_helpers.dart';
@@ -109,6 +110,8 @@ const Map<String, String> _labelTranslations = {
 };
 
 class VoiceAnnouncer {
+  static const MethodChannel _routingChannel = MethodChannel('tts_audio_routing');
+
   VoiceAnnouncer({VoiceSettings initialSettings = const VoiceSettings()})
       : _settings = initialSettings.validated() {
     _initialization = _configure();
@@ -146,6 +149,7 @@ class VoiceAnnouncer {
       try {
         _tts.setCompletionHandler(() {
           _isSpeaking = false;
+          unawaited(_afterSpeakRouting());
         });
       } catch (_) {}
       try {
@@ -274,6 +278,7 @@ class VoiceAnnouncer {
     } catch (_) {
       // Ignore stop failures.
     }
+    await _afterSpeakRouting();
     _pendingSpeech = null;
   }
 
@@ -306,6 +311,7 @@ class VoiceAnnouncer {
   Future<void> _playSpeech(_PendingSpeech request) async {
     _isSpeaking = true;
     try {
+      await _beforeSpeakRouting();
       try {
         await _tts.setQueueMode(1);
       } catch (_) {}
@@ -317,6 +323,7 @@ class VoiceAnnouncer {
     } catch (_) {
       // Ignore speak failures to keep detection loop running.
     } finally {
+      await _afterSpeakRouting();
       _isSpeaking = false;
       final next = _pendingSpeech;
       _pendingSpeech = null;
@@ -324,6 +331,18 @@ class VoiceAnnouncer {
         await _playSpeech(next);
       }
     }
+  }
+
+  Future<void> _beforeSpeakRouting() async {
+    try {
+      await _routingChannel.invokeMethod('configureForSpeaker');
+    } catch (_) {}
+  }
+
+  Future<void> _afterSpeakRouting() async {
+    try {
+      await _routingChannel.invokeMethod('restoreRouting');
+    } catch (_) {}
   }
 
   String? _buildMessage(

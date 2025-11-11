@@ -1,6 +1,10 @@
 package com.ultralytics.yolo_example
 
+import android.content.Context
 import android.graphics.RectF
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Bundle
 import android.widget.FrameLayout
 import io.flutter.embedding.android.FlutterActivity
@@ -15,6 +19,8 @@ class MainActivity : FlutterActivity() {
     private val overlayView: DetectionOverlayView by lazy { DetectionOverlayView(this) }
 
     private var lastInstruction: String? = null
+    private var audioManager: AudioManager? = null
+    private var focusRequest: AudioFocusRequest? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +61,51 @@ class MainActivity : FlutterActivity() {
         MethodChannel(messenger, NAVIGATION_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "processDetections" -> handleNavigationCall(call, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, TTS_ROUTING_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "configureForSpeaker" -> {
+                    audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+                    val attrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+
+                    focusRequest = AudioFocusRequest.Builder(
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+                    )
+                        .setAudioAttributes(attrs)
+                        .setOnAudioFocusChangeListener { }
+                        .build()
+
+                    val manager = audioManager
+                    val request = focusRequest
+                    if (manager != null && request != null) {
+                        manager.mode = AudioManager.MODE_NORMAL
+                        manager.isSpeakerphoneOn = true
+                        manager.requestAudioFocus(request)
+                    }
+
+                    result.success(true)
+                }
+
+                "restoreRouting" -> {
+                    val manager = audioManager
+                    val request = focusRequest
+                    if (manager != null && request != null) {
+                        try {
+                            manager.abandonAudioFocusRequest(request)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    focusRequest = null
+                    result.success(true)
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -193,5 +244,6 @@ class MainActivity : FlutterActivity() {
         private const val VOICE_CHANNEL = "voice_commands/methods"
         private const val VOICE_EVENTS_CHANNEL = "voice_commands/events"
         private const val NAVIGATION_CHANNEL = "navigation/depth"
+        private const val TTS_ROUTING_CHANNEL = "tts_audio_routing"
     }
 }
