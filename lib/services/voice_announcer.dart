@@ -241,18 +241,23 @@ class VoiceAnnouncer {
 
   Future<void> speakMessage(
     String message, {
+    bool force = false,
     bool bypassCooldown = false,
     bool storeAsLastMessage = true,
     bool ignorePause = false,
   }) async {
-    if (message.trim().isEmpty || (_isPaused && !ignorePause)) {
+    if (message.trim().isEmpty) {
+      return;
+    }
+
+    if (!force && _isPaused && !ignorePause) {
       return;
     }
 
     await _ensureConfigured();
 
     final now = DateTime.now();
-    if (!bypassCooldown && _shouldRespectCooldown(now)) {
+    if (!force && !bypassCooldown && _shouldRespectCooldown(now)) {
       return;
     }
 
