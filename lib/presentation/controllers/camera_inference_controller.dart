@@ -92,6 +92,10 @@ class CameraInferenceController extends ChangeNotifier {
   DateTime _lastWeatherFetch = DateTime.fromMillisecondsSinceEpoch(0);
   String? _connectionAlert;
   String? _cameraAlert;
+  bool _isSignReaderEnabled = false;
+  ModelType? _modelBeforeSignReader;
+  DateTime? _lastSignToggleTimestamp;
+  static const Duration _signToggleCooldown = Duration(milliseconds: 1500);
   // --- FIN DE VARIABLES ORIGINALES ---
 
   // --- GETTERS ORIGINALES ---
@@ -112,6 +116,7 @@ class CameraInferenceController extends ChangeNotifier {
   double get fontScale => _fontScale;
   VoiceSettings get voiceSettings => _voiceSettings;
   bool get areControlsLocked => _areControlsLocked;
+  bool get isProcessingVoiceCommand => _isProcessingVoiceCommand;
   ProcessedDetections get processedDetections => _processedDetections;
   SafetyAlerts get safetyAlerts => _safetyAlerts;
   String get formattedTime => DateFormat.Hm().format(_currentTime);
@@ -129,6 +134,14 @@ class CameraInferenceController extends ChangeNotifier {
   bool get isDepthServiceAvailable => _depthService != null;
   Uint8List? get cachedCartelImage => _cachedCartelImage;
   DateTime? get cachedCartelImageTimestamp => _cachedCartelImageTimestamp;
+  bool get isSignReaderEnabled => _isSignReaderEnabled;
+  ModelType get displayedModel =>
+      _isSignReaderEnabled ? ModelType.Exterior : _selectedModel;
+  bool get canToggleSignReader =>
+      displayedModel == ModelType.Exterior &&
+      !_isModelLoading &&
+      !_areControlsLocked &&
+      !_isProcessingVoiceCommand;
   // --- FIN DE GETTERS ORIGINALES ---
 
   CameraInferenceController({ModelType initialModel = ModelType.Interior})
@@ -1168,6 +1181,76 @@ class CameraInferenceController extends ChangeNotifier {
     }
   }
 
+  void handleModelSelection(ModelType model) {
+    if (_isDisposed) return;
+
+    if (model == ModelType.Exterior) {
+      if (_isSignReaderEnabled) {
+        setSignReaderEnabled(false);
+      } else {
+        changeModel(ModelType.Exterior);
+      }
+      return;
+    }
+
+    if (_isSignReaderEnabled) {
+      _isSignReaderEnabled = false;
+      _modelBeforeSignReader = null;
+    }
+
+    changeModel(model);
+  }
+
+  void setSignReaderEnabled(bool value) {
+    if (_isDisposed) return;
+
+    if (_isSignReaderEnabled == value) {
+      return;
+    }
+
+    if (_areControlsLocked || _isModelLoading || _isProcessingVoiceCommand) {
+      return;
+    }
+
+    final now = DateTime.now();
+    if (_lastSignToggleTimestamp != null &&
+        now.difference(_lastSignToggleTimestamp!) < _signToggleCooldown) {
+      return;
+    }
+
+    if (value) {
+      if (_selectedModel != ModelType.Exterior &&
+          _selectedModel != ModelType.LectorCarteles) {
+        return;
+      }
+      _lastSignToggleTimestamp = now;
+      _modelBeforeSignReader = _selectedModel == ModelType.LectorCarteles
+          ? (_modelBeforeSignReader ?? ModelType.Exterior)
+          : _selectedModel;
+      _isSignReaderEnabled = true;
+      notifyListeners();
+      if (_selectedModel != ModelType.LectorCarteles) {
+        changeModel(ModelType.LectorCarteles);
+      }
+      return;
+    }
+
+    if (!_isSignReaderEnabled) {
+      return;
+    }
+
+    _lastSignToggleTimestamp = now;
+    final fallback = _modelBeforeSignReader ?? ModelType.Exterior;
+    _isSignReaderEnabled = false;
+    _modelBeforeSignReader = null;
+    notifyListeners();
+    if (_selectedModel != fallback) {
+      changeModel(fallback);
+    } else if (_selectedModel == ModelType.LectorCarteles) {
+      changeModel(ModelType.Exterior);
+    }
+  }
+
   void changeModel(ModelType model) {
     if (_isDisposed) return;
 
@@ -1181,6 +1264,16 @@ class CameraInferenceController extends ChangeNotifier {
         numItemsThreshold: _numItemsThreshold,
       );
       _postProcessor.clearHistory();
+      if (model == ModelType.LectorCarteles) {
+        _isSignReaderEnabled = true;
+      } else {
+        if (_isSignReaderEnabled) {
+          _isSignReaderEnabled = false;
+        }
+        if (model != ModelType.LectorCarteles) {
+          _modelBeforeSignReader = null;
+        }
+      }
       notifyListeners();
       _loadModelForPlatform();
     }
