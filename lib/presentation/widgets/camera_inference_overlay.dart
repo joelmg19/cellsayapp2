@@ -23,12 +23,21 @@ class CameraInferenceOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final children = <Widget>[
       ModelSelector(
-        selectedModel: controller.selectedModel,
+        selectedModel: controller.displayedModel,
         isModelLoading: controller.isModelLoading,
-        onModelChanged: controller.changeModel,
+        onModelChanged: controller.handleModelSelection,
         textScaleFactor: controller.fontScale,
       ),
       SizedBox(height: isLandscape ? 8 : 12),
+      if (controller.displayedModel == ModelType.Exterior)
+        _SignReaderToggle(
+          isActive: controller.isSignReaderEnabled,
+          isEnabled: controller.canToggleSignReader,
+          onChanged: controller.setSignReaderEnabled,
+          textScaleFactor: controller.fontScale,
+        ),
+      if (controller.displayedModel == ModelType.Exterior)
+        SizedBox(height: isLandscape ? 8 : 12),
       DetectionStatsDisplay(
         detectionCount: controller.detectionCount,
         currentFps: controller.currentFps,
@@ -74,5 +83,60 @@ class CameraInferenceOverlay extends StatelessWidget {
       );
     }
     return const SizedBox.shrink();
+  }
+}
+
+class _SignReaderToggle extends StatelessWidget {
+  const _SignReaderToggle({
+    required this.isActive,
+    required this.isEnabled,
+    required this.onChanged,
+    required this.textScaleFactor,
+  });
+
+  final bool isActive;
+  final bool isEnabled;
+  final ValueChanged<bool> onChanged;
+  final double textScaleFactor;
+
+  @override
+  Widget build(BuildContext context) {
+    final labelStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 14 * textScaleFactor,
+      fontWeight: FontWeight.w600,
+    );
+
+    return Semantics(
+      container: true,
+      label: 'Activar lector de carteles',
+      hint: isEnabled
+          ? 'Usa el interruptor para ${isActive ? 'desactivar' : 'activar'} el lector de carteles.'
+          : 'Interruptor deshabilitado mientras los controles están bloqueados o el sistema está ocupado.',
+      toggled: isActive,
+      enabled: isEnabled,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Lector de carteles',
+                style: labelStyle,
+              ),
+            ),
+            Switch.adaptive(
+              value: isActive,
+              onChanged: isEnabled ? onChanged : null,
+              activeColor: Theme.of(context).colorScheme.primary,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

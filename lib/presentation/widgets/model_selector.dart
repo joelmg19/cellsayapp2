@@ -36,7 +36,9 @@ class ModelSelector extends StatelessWidget {
           child: Wrap(
             spacing: 2.0, // Espacio horizontal entre botones
             runSpacing: 2.0, // Espacio vertical si saltan de línea
-            children: ModelType.values.map((model) {
+            children: ModelType.values
+                .where((model) => model != ModelType.LectorCarteles)
+                .map((model) {
               // --- FIN DE MODIFICACIÓN ---
               final isSelected = selectedModel == model;
               return GestureDetector(
