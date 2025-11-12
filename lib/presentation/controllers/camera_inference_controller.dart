@@ -456,8 +456,6 @@ class CameraInferenceController extends ChangeNotifier {
         final text = textBuffer.toString().trim();
         if (text.isNotEmpty) {
           buffer
-            ..write('Cartel detectado. ')
-            ..write('Dice: ')
             ..write(text)
             ..write('. ');
         }
