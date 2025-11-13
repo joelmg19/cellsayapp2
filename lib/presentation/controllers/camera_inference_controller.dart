@@ -391,6 +391,28 @@ class CameraInferenceController extends ChangeNotifier {
     onDetectionResults(results, originalImage);
   }
 
+  String _normalizeCartelText(String text) {
+    final collapsedWhitespace = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (collapsedWhitespace.isEmpty) {
+      return '';
+    }
+
+    final pattern = RegExp(
+      r"""(?:^|\s)[\p{L}\p{N}](?:\s+[\p{L}\p{N}]){1,}(?=(?:\s|$|[\.,;:!\?\)\]"'»”’]))""",
+      unicode: true,
+    );
+
+    final normalized = collapsedWhitespace.replaceAllMapped(pattern, (match) {
+      final segment = match.group(0)!;
+      final hasLeadingSpace = segment.startsWith(RegExp(r'\s'));
+      final trimmed = segment.trim();
+      final collapsedLetters = trimmed.replaceAll(RegExp(r'\s+'), '');
+      return hasLeadingSpace ? ' $collapsedLetters' : collapsedLetters;
+    });
+
+    return normalized.trim();
+  }
+
   Future<void> _captureAndReadSign(
     Uint8List imageBytes,
     ProcessedDetections processed,
@@ -478,9 +500,11 @@ class CameraInferenceController extends ChangeNotifier {
       final safeAnnouncement = announcement.isNotEmpty
           ? announcement
           : recognized.text.replaceAll('\n', ' ').trim();
+      final normalizedAnnouncement =
+          _normalizeCartelText(safeAnnouncement);
 
-      final String finalAnnouncement = safeAnnouncement.isNotEmpty
-          ? 'Cartel detectado. Dice: $safeAnnouncement'
+      final String finalAnnouncement = normalizedAnnouncement.isNotEmpty
+          ? 'Cartel detectado. Dice: $normalizedAnnouncement'
           : 'Cartel detectado, pero no se pudo leer texto.';
       final trimmedAnnouncement = finalAnnouncement.trim();
 
