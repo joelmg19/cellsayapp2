@@ -61,6 +61,7 @@ class VoiceCommandService {
     final fileName =
         'intent_${DateTime.now().millisecondsSinceEpoch}_${_hashCodeString()}.wav';
     final filePath = p.join(directory.path, fileName);
+    debugPrint('VoiceCommandService: grabando comando en $filePath');
 
     final duration = listenFor ?? listenDuration;
 
@@ -74,6 +75,7 @@ class VoiceCommandService {
         ),
         path: filePath,
       );
+      debugPrint('VoiceCommandService: grabación iniciada (${duration.inMilliseconds} ms)');
     } catch (error, stackTrace) {
       debugPrint('Error al iniciar la grabación: $error\n$stackTrace');
       onError('No fue posible acceder al micrófono.');
@@ -106,6 +108,7 @@ class VoiceCommandService {
     String? recordedPath;
     try {
       recordedPath = await _recorder.stop();
+      debugPrint('VoiceCommandService: grabación finalizada, archivo=$recordedPath');
     } catch (error, stackTrace) {
       debugPrint('Error al detener la grabación: $error\n$stackTrace');
       recordedPath = null;
@@ -131,11 +134,14 @@ class VoiceCommandService {
     }
 
     try {
+      debugPrint('VoiceCommandService: ejecutando inferencia para $recordedPath');
       final result = await _recognizer.recognizeFile(recordedPath);
       if (result == null) {
         errorCallback?.call('No se detectó ninguna intención clara.');
+        debugPrint('VoiceCommandService: inferencia sin resultado');
       } else {
         resultCallback?.call(result);
+        debugPrint('VoiceCommandService: resultado ${result.label} (${result.score})');
       }
     } catch (error, stackTrace) {
       debugPrint('Error al clasificar audio: $error\n$stackTrace');

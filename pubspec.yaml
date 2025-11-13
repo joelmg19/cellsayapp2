@@ -46,8 +46,9 @@ flutter:
     - assets/config/
     - assets/logo.png
     - assets/applogo.png
+    - assets/models/model_fp16.tflite
     - assets/models/best_float16.tflite
-    - assets/models/carteles.tflite    # <-- AÑADE ESTA LÍNEA
+    - assets/models/carteles.tflite
     - assets/config/calibration.json
 
 flutter_launcher_icons:

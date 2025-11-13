@@ -81,14 +81,7 @@ class IntentRecognizer {
     if (_isInitialized) return;
 
     try {
-      final options = InterpreterOptions();
-      if (!kIsWeb) {
-        options.threads = 2;
-      }
-      final interpreter = await Interpreter.fromAsset(
-        modelAssetPath,
-        options: options,
-      );
+      final interpreter = await _loadModel();
 
       final inputTensor = interpreter.getInputTensor(0);
       final outputTensor = interpreter.getOutputTensor(0);
@@ -101,10 +94,30 @@ class IntentRecognizer {
       _mfcc = _buildMfccProcessor(_inputShape!);
       _interpreter = interpreter;
       _isInitialized = true;
+      debugPrint(
+        'IntentRecognizer listo. '
+        'Input=$_inputShape ($_inputType) | '
+        'Output=$_outputShape ($_outputType) | '
+        'Labels=${_labels.length}',
+      );
     } catch (error, stackTrace) {
       debugPrint('IntentRecognizer initialization failed: $error\n$stackTrace');
       rethrow;
     }
+  }
+
+  Future<Interpreter> _loadModel() async {
+    final options = InterpreterOptions();
+    if (!kIsWeb) {
+      options.threads = 2;
+    }
+    debugPrint('IntentRecognizer: cargando modelo $modelAssetPath');
+    final interpreter = await Interpreter.fromAsset(
+      modelAssetPath,
+      options: options,
+    );
+    debugPrint('IntentRecognizer: modelo cargado correctamente');
+    return interpreter;
   }
 
   /// Releases interpreter resources.
@@ -145,7 +158,9 @@ class IntentRecognizer {
     }
 
     final normalized = _prepareInputAudio(audioSamples);
+    debugPrint('IntentRecognizer: muestras=${audioSamples.length}, normalizadas=${normalized.length}');
     final features = mfcc.process(normalized);
+    debugPrint('IntentRecognizer: MFCC listo (${features.length} valores)');
 
     final requiredLength = inputShape.fold<int>(1, (value, element) => value * element);
     if (features.length != requiredLength) {
@@ -158,9 +173,11 @@ class IntentRecognizer {
     final reshapedInput = _reshapeInputData(inputData, inputShape);
     final outputContainer = _createZeroedOutput(outputShape);
 
+    debugPrint('IntentRecognizer: ejecutando inferencia...');
     interpreter.run(reshapedInput, outputContainer);
 
     final scores = _flattenOutput(outputContainer);
+    debugPrint('IntentRecognizer: salida cruda (${scores.length} scores)');
     final expectedOutputLength =
         outputShape.fold<int>(1, (value, element) => value * element);
     if (scores.length != expectedOutputLength) {
@@ -182,16 +199,20 @@ class IntentRecognizer {
 
     final label = _labels[maxIndex];
     final group = _mapLabelToGroup(label);
-    return IntentRecognitionResult(
+    final result = IntentRecognitionResult(
       label: label,
       score: maxScore,
       group: group,
     );
+    debugPrint('IntentRecognizer: resultado=$result');
+    return result;
   }
 
   /// Convenience wrapper around [recognize] that accepts a WAV file path.
   Future<IntentRecognitionResult?> recognizeFile(String wavFilePath) async {
+    debugPrint('IntentRecognizer: leyendo archivo $wavFilePath');
     final samples = await decodeWavFile(wavFilePath);
+    debugPrint('IntentRecognizer: archivo ${samples.length} muestras flotantes');
     return recognize(samples);
   }
 
@@ -275,28 +296,39 @@ class IntentRecognizer {
     for (var i = 0; i < samples.length; i++) {
       floatSamples[i] = samples[i] * scale;
     }
+    debugPrint(
+      'IntentRecognizer: WAV decodificado -> canales=$channels bits=$bitDepth sr=$sampleRate muestras=${floatSamples.length}',
+    );
     return floatSamples;
   }
 
-  List<double> _prepareInputAudio(Float32List input) {
+  Float32List _prepareInputAudio(Float32List input) {
     final expectedSamples = sampleRate;
     final normalized = Float32List(expectedSamples);
 
     if (input.length >= expectedSamples) {
-      normalized.setAll(0, input.sublist(input.length - expectedSamples));
+      final start = input.length - expectedSamples;
+      for (var i = 0; i < expectedSamples; i++) {
+        normalized[i] = input[start + i];
+      }
     } else {
-      final start = expectedSamples - input.length;
-      for (int i = 0; i < start; i++) {
+      final offset = expectedSamples - input.length;
+      for (var i = 0; i < offset; i++) {
         normalized[i] = 0;
       }
-      normalized.setAll(start, input);
+      for (var i = 0; i < input.length; i++) {
+        normalized[offset + i] = input[i];
+      }
     }
 
     // Apply pre-emphasis filter.
-    final emphasized = List<double>.generate(expectedSamples, (index) {
-      if (index == 0) return normalized[index].toDouble();
-      return normalized[index] - _preEmphasis * normalized[index - 1];
-    });
+    final emphasized = Float32List(expectedSamples);
+    if (expectedSamples > 0) {
+      emphasized[0] = normalized[0];
+      for (var i = 1; i < expectedSamples; i++) {
+        emphasized[i] = normalized[i] - _preEmphasis * normalized[i - 1];
+      }
+    }
     return emphasized;
   }
 
@@ -363,6 +395,7 @@ class IntentRecognizer {
     if (labels.isEmpty) {
       throw StateError('El archivo de etiquetas está vacío.');
     }
+    debugPrint('IntentRecognizer: ${labels.length} etiquetas cargadas');
     return labels;
   }
 
@@ -378,6 +411,7 @@ class IntentRecognizer {
     } else {
       throw StateError('Dimensión de entrada no soportada: $inputShape');
     }
+    debugPrint('IntentRecognizer: configurando MFCC frames=$frameCount features=$featureCount');
     return MfccProcessor(
       sampleRate: sampleRate,
       frameCount: frameCount,
@@ -480,9 +514,9 @@ class MfccProcessor {
   late final List<List<double>> _melFilterBank;
   late final List<List<double>> _dctMatrix;
 
-  List<double> process(List<double> audio) {
+  Float32List process(Float32List audio) {
     final frames = _extractFrames(audio);
-    final features = List<double>.filled(frameCount * featureCount, 0);
+    final features = Float32List(frameCount * featureCount);
 
     final melEnergies = List<double>.filled(numMelFilters, 0);
     final spectrum = List<double>.filled(fftSize ~/ 2 + 1, 0);
@@ -542,11 +576,11 @@ class MfccProcessor {
     return features;
   }
 
-  List<List<double>> _extractFrames(List<double> audio) {
-    final frames = <List<double>>[];
+  List<Float32List> _extractFrames(Float32List audio) {
+    final frames = <Float32List>[];
     int index = 0;
     for (var i = 0; i < frameCount; i++) {
-      final frame = List<double>.filled(frameLength, 0);
+      final frame = Float32List(frameLength);
       for (var j = 0; j < frameLength; j++) {
         final sampleIndex = index + j;
         if (sampleIndex < audio.length) {

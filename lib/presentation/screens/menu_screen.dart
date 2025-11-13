@@ -131,6 +131,7 @@ class _MenuScreenState extends State<MenuScreen> {
       directory.path,
       'menu_intent_${DateTime.now().millisecondsSinceEpoch}.wav',
     );
+    debugPrint('MenuScreen: iniciando captura de intención en $filePath');
     try {
       await _recorder.start(
         const RecordConfig(
@@ -141,6 +142,7 @@ class _MenuScreenState extends State<MenuScreen> {
         ),
         path: filePath,
       );
+      debugPrint('MenuScreen: grabación activa durante ${_listenDuration.inMilliseconds} ms');
     } catch (error) {
       debugPrint('Error al iniciar captura de audio del menú: $error');
       await _speak('No pude acceder al micrófono.');
@@ -152,6 +154,7 @@ class _MenuScreenState extends State<MenuScreen> {
     String? recordedPath;
     try {
       recordedPath = await _recorder.stop();
+      debugPrint('MenuScreen: grabación finalizada -> $recordedPath');
     } catch (error) {
       debugPrint('Error al detener captura de audio del menú: $error');
       recordedPath = null;
@@ -163,10 +166,13 @@ class _MenuScreenState extends State<MenuScreen> {
     }
 
     try {
+      debugPrint('MenuScreen: ejecutando IntentRecognizer en $recordedPath');
       final result = await _intentRecognizer.recognizeFile(recordedPath);
       if (result == null || result.score < _intentThreshold) {
+        debugPrint('MenuScreen: no se obtuvo intención (resultado=$result)');
         return null;
       }
+      debugPrint('MenuScreen: intención detectada ${result.label} (${result.score})');
       return result;
     } catch (error) {
       debugPrint('Error clasificando comando de menú: $error');
