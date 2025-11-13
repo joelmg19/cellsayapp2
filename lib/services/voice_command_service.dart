@@ -1,201 +1,190 @@
-
 import 'dart:async';
+import 'dart:io';
 
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
-typedef VoiceCommandResultCallback = void Function(String text);
+import 'intent_recognizer.dart';
+
+typedef VoiceCommandResultCallback = void Function(
+    IntentRecognitionResult result);
 typedef VoiceCommandErrorCallback = void Function(String message);
 typedef VoiceCommandListeningCallback = void Function(bool isListening);
 
-/// Manages speech recognition sessions for voice commands.
+/// Captures short audio commands, classifies them with [IntentRecognizer] and
+/// reports the resulting intent.
 class VoiceCommandService {
-  VoiceCommandService();
+  VoiceCommandService({IntentRecognizer? recognizer})
+      : _recognizer = recognizer ?? IntentRecognizer();
 
-  final SpeechToText _speechToText = SpeechToText();
-  bool _isAvailable = false;
-  String? _cachedLocale;
-  bool _initializing = false;
+  final IntentRecognizer _recognizer;
+  final Record _recorder = Record();
 
-  Future<bool> _ensureInitialized({
-    VoiceCommandErrorCallback? onError,
-    VoiceCommandListeningCallback? onStatus,
-  }) async {
-    if (_speechToText.isAvailable) {
-      _isAvailable = true;
-      return true;
-    }
+  VoiceCommandResultCallback? _pendingResult;
+  VoiceCommandErrorCallback? _pendingError;
+  VoiceCommandListeningCallback? _pendingStatus;
+  Timer? _autoStopTimer;
+  bool _isListening = false;
+  String? _currentRecordingPath;
 
-    if (_initializing) {
-      while (_initializing) {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      }
-      return _isAvailable;
-    }
+  Duration listenDuration = const Duration(seconds: 2);
 
-    _initializing = true;
-    try {
-      final bool initialized;
-      try {
-        initialized = await _speechToText.initialize(
-          onStatus: (status) {
-            if (status == 'listening') {
-              onStatus?.call(true);
-            } else if (status == 'notListening') {
-              onStatus?.call(false);
-            }
-          },
-          onError: (error) {
-            final message = error.errorMsg.isNotEmpty
-                ? error.errorMsg
-                : 'Error desconocido en el reconocimiento de voz.';
-            onError?.call(message);
-          },
-        );
-      } on TypeError {
-        onError?.call(
-          'El reconocimiento de voz no está disponible por una respuesta inválida del sistema.',
-        );
-        return false;
-      }
-
-      _isAvailable = initialized;
-
-      if (_isAvailable && _cachedLocale == null) {
-        final systemLocale = await _speechToText.systemLocale();
-        if (systemLocale != null) {
-          _cachedLocale = systemLocale.localeId;
-        } else {
-          final locales = await _speechToText.locales();
-          _cachedLocale = _findSpanishLocale(locales) ??
-              (locales.isNotEmpty ? locales.first.localeId : null);
-        }
-      }
-    } finally {
-      _initializing = false;
-    }
-
-    return _isAvailable;
-  }
-
-  String? _findSpanishLocale(List<LocaleName> locales) {
-    for (final locale in locales) {
-      if (locale.localeId.toLowerCase().startsWith('es')) {
-        return locale.localeId;
-      }
-    }
-    return null;
-  }
+  bool get isListening => _isListening;
 
   Future<bool> startListening({
     required VoiceCommandResultCallback onResult,
     required VoiceCommandErrorCallback onError,
     VoiceCommandListeningCallback? onStatus,
-    Duration listenFor = const Duration(seconds: 8),
-    Duration pauseFor = const Duration(seconds: 3),
+    Duration? listenFor,
   }) async {
-    if (_speechToText.isListening) {
-      await _speechToText.stop();
+    if (_isListening) {
+      await cancelListening();
     }
-
-    final available = await _ensureInitialized(onError: onError, onStatus: onStatus);
-    if (!available) {
-      onError('El reconocimiento de voz no está disponible.');
-      return false;
-    }
-
-    final localeId = _cachedLocale ?? 'es_ES';
-    final safeListenFor = _sanitizeDuration(
-      listenFor,
-      min: const Duration(seconds: 3),
-      max: const Duration(seconds: 20),
-      fallback: const Duration(seconds: 8),
-    );
-    final safePauseFor = _sanitizeDuration(
-      pauseFor,
-      min: const Duration(seconds: 1),
-      max: const Duration(seconds: 8),
-      fallback: const Duration(seconds: 3),
-    );
 
     try {
-      final bool started;
-      try {
-        final dynamic result = await _speechToText.listen(
-          onResult: (result) {
-            if (!result.finalResult) {
-              return;
-            }
-            final recognized = result.recognizedWords.trim();
-            if (recognized.isEmpty) {
-              onError('No se escuchó ningún comando.');
-            } else {
-              onResult(recognized);
-            }
-          },
-          listenFor: safeListenFor,
-          pauseFor: safePauseFor,
-          partialResults: false,
-          localeId: localeId,
-        );
-        if (result is bool) {
-          started = result;
-        } else {
-          started = _speechToText.isListening;
-        }
-      } on TypeError {
-        onError(
-          'El servicio de voz no pudo iniciar la escucha por una respuesta inválida.',
-        );
-        return false;
-      }
-
-      if (!started) {
-        onError('No se pudo iniciar la escucha.');
-        return false;
-      }
-
-      onStatus?.call(true);
-      return true;
-    } catch (error) {
-      onError('Error al iniciar la escucha: $error');
+      await _recognizer.initialize();
+    } catch (error, stackTrace) {
+      debugPrint('No fue posible inicializar el IntentRecognizer: $error\n$stackTrace');
+      onError('No fue posible preparar el reconocimiento de comandos.');
       return false;
     }
+
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) {
+      onError('Permiso de micrófono denegado.');
+      return false;
+    }
+
+    final directory = await getTemporaryDirectory();
+    final fileName =
+        'intent_${DateTime.now().millisecondsSinceEpoch}_${_hashCodeString()}.wav';
+    final filePath = p.join(directory.path, fileName);
+
+    final duration = listenFor ?? listenDuration;
+
+    try {
+      await _recorder.start(
+        path: filePath,
+        encoder: AudioEncoder.wav,
+        samplingRate: IntentRecognizer.sampleRate,
+        bitRate: 128000,
+        numChannels: 1,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Error al iniciar la grabación: $error\n$stackTrace');
+      onError('No fue posible acceder al micrófono.');
+      return false;
+    }
+
+    _pendingResult = onResult;
+    _pendingError = onError;
+    _pendingStatus = onStatus;
+    _currentRecordingPath = filePath;
+    _isListening = true;
+    onStatus?.call(true);
+
+    _autoStopTimer?.cancel();
+    _autoStopTimer = Timer(duration, () {
+      unawaited(stopListening());
+    });
+
+    return true;
   }
 
   Future<void> stopListening() async {
-    if (_speechToText.isListening) {
-      await _speechToText.stop();
+    if (!_isListening) {
+      return;
+    }
+
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+
+    String? recordedPath;
+    try {
+      recordedPath = await _recorder.stop();
+    } catch (error, stackTrace) {
+      debugPrint('Error al detener la grabación: $error\n$stackTrace');
+      recordedPath = null;
+    }
+
+    final status = _pendingStatus;
+    status?.call(false);
+    _isListening = false;
+
+    final resultCallback = _pendingResult;
+    final errorCallback = _pendingError;
+    _pendingResult = null;
+    _pendingError = null;
+    _pendingStatus = null;
+
+    final tempPath = _currentRecordingPath;
+    _currentRecordingPath = null;
+
+    if (recordedPath == null) {
+      errorCallback?.call('No se capturó audio.');
+      await _deleteIfExists(tempPath);
+      return;
+    }
+
+    try {
+      final result = await _recognizer.recognizeFile(recordedPath);
+      if (result == null) {
+        errorCallback?.call('No se detectó ninguna intención clara.');
+      } else {
+        resultCallback?.call(result);
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Error al clasificar audio: $error\n$stackTrace');
+      errorCallback?.call('No se pudo procesar el comando de voz.');
+    } finally {
+      await _deleteIfExists(recordedPath);
     }
   }
 
   Future<void> cancelListening() async {
-    if (_speechToText.isListening) {
-      await _speechToText.cancel();
+    if (!_isListening) {
+      return;
     }
-  }
 
-  bool get isListening => _speechToText.isListening;
+    _autoStopTimer?.cancel();
+    _autoStopTimer = null;
+    try {
+      await _recorder.stop();
+    } catch (error, stackTrace) {
+      debugPrint('Error al cancelar la grabación: $error\n$stackTrace');
+    }
+
+    final status = _pendingStatus;
+    status?.call(false);
+
+    _isListening = false;
+    final tempPath = _currentRecordingPath;
+    _currentRecordingPath = null;
+    _pendingResult = null;
+    _pendingError = null;
+    _pendingStatus = null;
+
+    await _deleteIfExists(tempPath);
+  }
 
   Future<void> dispose() async {
     await cancelListening();
+    await _recorder.dispose();
   }
 
-  Duration _sanitizeDuration(
-    Duration value, {
-    required Duration min,
-    required Duration max,
-    required Duration fallback,
-  }) {
-    final milliseconds = value.inMilliseconds;
-    if (milliseconds <= 0) {
-      return fallback;
+  Future<void> _deleteIfExists(String? path) async {
+    if (path == null) return;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // ignore
     }
-    if (milliseconds < min.inMilliseconds) {
-      return min;
-    }
-    if (milliseconds > max.inMilliseconds) {
-      return max;
-    }
-    return value;
   }
+
+  String _hashCodeString() => hashCode.toRadixString(16);
 }

@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import 'package:ultralytics_yolo_example/models/camera_launch_args.dart';
 import 'package:ultralytics_yolo_example/models/models.dart';
 import 'package:ultralytics_yolo_example/services/weather_service.dart';
+import 'package:ultralytics_yolo_example/services/intent_recognizer.dart';
 
 class MenuScreen extends StatefulWidget {
   const MenuScreen({super.key});
@@ -15,9 +19,30 @@ class MenuScreen extends StatefulWidget {
 
 class _MenuScreenState extends State<MenuScreen> {
   final _tts = FlutterTts();
-  final _stt = stt.SpeechToText();
+  final _intentRecognizer = IntentRecognizer();
+  final Record _recorder = Record();
   final _weather = WeatherService();
   bool _isListening = false;
+  bool _isRecognizerReady = false;
+  bool _isLoopActive = false;
+  static const Duration _listenDuration = Duration(seconds: 2);
+  static const double _intentThreshold = 0.6;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_initializeRecognizer());
+  }
+
+  Future<void> _initializeRecognizer() async {
+    try {
+      await _intentRecognizer.initialize();
+      if (!mounted) return;
+      setState(() => _isRecognizerReady = true);
+    } catch (error) {
+      debugPrint('No se pudo cargar el modelo de intenciones: $error');
+    }
+  }
 
   Future<void> _speak(String text) async {
     await _tts.setLanguage('es-MX');
@@ -49,95 +74,169 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  void _listenForCommand() {
-    if (!_isListening) return;
-    unawaited(
-      _stt.listen(
-        localeId: 'es_MX',
-        listenFor: const Duration(seconds: 12),
-        pauseFor: const Duration(seconds: 4),
-        partialResults: false,
-        cancelOnError: true,
-        onResult: (r) {
-          if (!r.finalResult) return;
-          _handleVoice(r.recognizedWords);
-        },
-      ),
-    );
-  }
-
   Future<void> _startTalkback() async {
     if (_isListening) {
-      await _stt.stop();
-      setState(() => _isListening = false);
+      await _stopListening();
       await _speak('Voz desactivada.');
       return;
     }
-    await _readMenu();
-    await Future.delayed(const Duration(milliseconds: 400));
-    final ok = await _stt.initialize();
-    if (!ok) {
-      await _speak('Micrófono no disponible.');
+    if (!_isRecognizerReady) {
+      await _initializeRecognizer();
+    }
+    if (!_isRecognizerReady) {
+      await _speak('No pude activar el reconocimiento de comandos.');
+      return;
+    }
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) {
+      await _speak('Permiso de micrófono denegado.');
       return;
     }
     setState(() => _isListening = true);
-    _listenForCommand();
+    await _readMenu();
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!_isLoopActive) {
+      _listenLoop();
+    }
   }
 
-  void _handleVoice(String words) async {
-    final t = words.toLowerCase();
-    if (t.contains('dinero')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/money');
-      return;
+  Future<void> _listenLoop() async {
+    if (_isLoopActive) return;
+    _isLoopActive = true;
+    try {
+      while (_isListening && mounted) {
+        final result = await _captureIntent();
+        if (!_isListening || !mounted) break;
+        if (result == null) {
+          await _speak(
+            'No pude entender la opción. Por favor, dilo de nuevo.',
+          );
+          continue;
+        }
+        final handled = await _handleIntentResult(result);
+        if (!handled && _isListening && mounted) {
+          await _speak(
+            'No pude procesar esa opción. Intenta de nuevo.',
+          );
+        }
+      }
+    } finally {
+      _isLoopActive = false;
     }
-    if (t.contains('objeto')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/camera');
-      return;
-    }
-    if (t.contains('profund')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/depth');
-      return;
-    }
-    if (t.contains('lectura') || t.contains('texto') || t.contains('leer')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/text-reader');
-      return;
-    }
-    if (t.contains('hora')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      await _sayTime();
-      return;
-    }
-    if (t.contains('clima')) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      await _sayWeather();
-      return;
+  }
+
+  Future<IntentRecognitionResult?> _captureIntent() async {
+    final directory = await getTemporaryDirectory();
+    final filePath = p.join(
+      directory.path,
+      'menu_intent_${DateTime.now().millisecondsSinceEpoch}.wav',
+    );
+    try {
+      await _recorder.start(
+        path: filePath,
+        encoder: AudioEncoder.wav,
+        samplingRate: IntentRecognizer.sampleRate,
+        bitRate: 128000,
+        numChannels: 1,
+      );
+    } catch (error) {
+      debugPrint('Error al iniciar captura de audio del menú: $error');
+      await _speak('No pude acceder al micrófono.');
+      await _stopListening();
+      return null;
     }
 
-    await _stt.stop();
+    await Future<void>.delayed(_listenDuration);
+    String? recordedPath;
+    try {
+      recordedPath = await _recorder.stop();
+    } catch (error) {
+      debugPrint('Error al detener captura de audio del menú: $error');
+      recordedPath = null;
+    }
+
+    if (recordedPath == null) {
+      await File(filePath).delete().catchError((_) {});
+      return null;
+    }
+
+    try {
+      final result = await _intentRecognizer.recognizeFile(recordedPath);
+      if (result == null || result.score < _intentThreshold) {
+        return null;
+      }
+      return result;
+    } catch (error) {
+      debugPrint('Error clasificando comando de menú: $error');
+      return null;
+    } finally {
+      await File(recordedPath).delete().catchError((_) {});
+    }
+  }
+
+  Future<bool> _handleIntentResult(IntentRecognitionResult result) async {
+    switch (result.group) {
+      case IntentGroup.dinero:
+        await _stopListening();
+        if (!mounted) return true;
+        Navigator.pushNamed(context, '/money');
+        return true;
+      case IntentGroup.objetos:
+        await _stopListening();
+        if (!mounted) return true;
+        Navigator.pushNamed(context, '/camera');
+        return true;
+      case IntentGroup.profundidad:
+        await _stopListening();
+        if (!mounted) return true;
+        Navigator.pushNamed(context, '/depth');
+        return true;
+      case IntentGroup.lectura:
+        await _stopListening();
+        if (!mounted) return true;
+        Navigator.pushNamed(context, '/text-reader');
+        return true;
+      case IntentGroup.hora:
+        await _stopListening();
+        await _sayTime();
+        return true;
+      case IntentGroup.clima:
+        await _stopListening();
+        await _sayWeather();
+        return true;
+      case IntentGroup.menu:
+        await _speak(
+          'Opciones: Dinero, Objetos, Profundidad, Lectura, Hora y Clima.',
+        );
+        return true;
+      case IntentGroup.camaraAyuda:
+      case IntentGroup.camaraLectorCarteles:
+      case IntentGroup.camaraTexto:
+      case IntentGroup.camaraVoz:
+      case IntentGroup.camaraZoom:
+      case IntentGroup.camaraRepetir:
+        await _speak('Ese comando pertenece al modo cámara. Diga una opción del menú.');
+        return true;
+      case IntentGroup.unknown:
+        return false;
+    }
+  }
+
+  Future<void> _stopListening() async {
     if (!_isListening) return;
-    await _speak('No pude entender la opción. Por favor, dilo de nuevo.');
-    if (!_isListening) return;
-    _listenForCommand();
+    setState(() => _isListening = false);
+    try {
+      await _recorder.stop();
+    } catch (_) {
+      // ignore
+    }
   }
 
   @override
   void dispose() {
-    _stt.cancel();
     _tts.stop();
+    _intentRecognizer.dispose();
+    _recorder.dispose();
     super.dispose();
   }
 
