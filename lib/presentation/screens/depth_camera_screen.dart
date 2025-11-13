@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+// Mantener image ^4.x en línea con flutter_launcher_icons 0.14.4 para evitar choques.
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
