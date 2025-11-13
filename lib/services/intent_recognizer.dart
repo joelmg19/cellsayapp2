@@ -69,8 +69,8 @@ class IntentRecognizer {
   // Nota: eliminamos la dependencia de tflite_flutter_helper para evitar
   // incompatibilidades con camera; por ello gestionamos manualmente los buffers
   // del intérprete usando tflite_flutter puro.
-  TfLiteType? _inputType;
-  TfLiteType? _outputType;
+  TensorType? _inputType;
+  TensorType? _outputType;
   bool _isInitialized = false;
 
   bool get isInitialized => _isInitialized;
@@ -140,7 +140,7 @@ class IntentRecognizer {
       throw StateError('IntentRecognizer is not initialized.');
     }
 
-    if (_inputType != TfLiteType.float32 || _outputType != TfLiteType.float32) {
+    if (_inputType != TensorType.float32 || _outputType != TensorType.float32) {
       throw UnsupportedError('Solo se soportan modelos de tipo float32.');
     }
 
