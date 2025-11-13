@@ -154,17 +154,20 @@ class IntentRecognizer {
       );
     }
 
-    final inputTensor = interpreter.getInputTensor(0);
     final inputData = Float32List.fromList(features);
-    inputTensor.copyFromBuffer(inputData.buffer);
+    final reshapedInput = _reshapeInputData(inputData, inputShape);
+    final outputContainer = _createZeroedOutput(outputShape);
 
-    interpreter.invoke();
+    interpreter.run(reshapedInput, outputContainer);
 
-    final outputTensor = interpreter.getOutputTensor(0);
-    final outputLength = outputShape.fold<int>(1, (value, element) => value * element);
-    final outputData = Float32List(outputLength);
-    outputTensor.copyToBuffer(outputData.buffer);
-    final scores = outputData.toList();
+    final scores = _flattenOutput(outputContainer);
+    final expectedOutputLength =
+        outputShape.fold<int>(1, (value, element) => value * element);
+    if (scores.length != expectedOutputLength) {
+      throw StateError(
+        'Unexpected output length ${scores.length}; expected $expectedOutputLength.',
+      );
+    }
     final probabilities = _softmax(scores);
 
     final maxScore = probabilities.reduce(max);
@@ -295,6 +298,59 @@ class IntentRecognizer {
       return normalized[index] - _preEmphasis * normalized[index - 1];
     });
     return emphasized;
+  }
+
+  dynamic _reshapeInputData(Float32List data, List<int> shape) {
+    if (shape.isEmpty) {
+      throw StateError('Input shape cannot be empty.');
+    }
+    var index = 0;
+
+    dynamic build(int dimension) {
+      final size = shape[dimension];
+      if (dimension == shape.length - 1) {
+        return List<double>.generate(size, (_) {
+          if (index >= data.length) {
+            throw StateError('Input data is shorter than expected for shape $shape.');
+          }
+          return data[index++];
+        }, growable: false);
+      }
+      return List.generate(size, (_) => build(dimension + 1), growable: false);
+    }
+
+    final reshaped = build(0);
+    if (index != data.length) {
+      throw StateError('Input data length ${data.length} does not match shape $shape.');
+    }
+    return reshaped;
+  }
+
+  dynamic _createZeroedOutput(List<int> shape) {
+    if (shape.isEmpty) {
+      return <double>[];
+    }
+    if (shape.length == 1) {
+      return List<double>.filled(shape.first, 0.0, growable: false);
+    }
+    final tailShape = shape.sublist(1);
+    return List.generate(shape.first, (_) => _createZeroedOutput(tailShape), growable: false);
+  }
+
+  List<double> _flattenOutput(dynamic tensor) {
+    final result = <double>[];
+    void collect(dynamic value) {
+      if (value is List) {
+        for (final element in value) {
+          collect(element);
+        }
+      } else if (value is num) {
+        result.add(value.toDouble());
+      }
+    }
+
+    collect(tensor);
+    return result;
   }
 
   Future<List<String>> _loadLabels() async {
