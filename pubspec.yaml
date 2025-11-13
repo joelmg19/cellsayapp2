@@ -18,7 +18,7 @@ dependencies:
   intl: ^0.19.0
   camera: ^0.11.0+2
   image: ^4.3.0
-  tflite_flutter: ^0.9.0
+  tflite_flutter: ^0.12.1 # >=0.12.x incluye la corrección para UnmodifiableUint8ListView en Dart 3.8+
   permission_handler: ^11.3.1
   ultralytics_yolo:
     git:
@@ -27,7 +27,7 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   flutter_tts: ^3.8.0
-  record: ^5.0.5
+  record: ^6.1.2 # >=6.1.2 depende de record_linux >=1.2.1 que implementa startStream
   google_mlkit_text_recognition: ^0.13.0
 
 dev_dependencies:
@@ -54,3 +54,10 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/applogo.png"
+
+# Forzamos versiones coherentes del stack de grabación multiplataforma. Esto evita
+# el conflicto entre record_platform_interface 1.4.0 y versiones antiguas de
+# record_linux que no implementaban startStream.
+dependency_overrides:
+  record_platform_interface: ^1.4.0
+  record_linux: ^1.2.1
