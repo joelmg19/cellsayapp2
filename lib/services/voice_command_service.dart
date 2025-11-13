@@ -20,7 +20,7 @@ class VoiceCommandService {
       : _recognizer = recognizer ?? IntentRecognizer();
 
   final IntentRecognizer _recognizer;
-  final Record _recorder = Record();
+  final AudioRecorder _recorder = AudioRecorder();
 
   VoiceCommandResultCallback? _pendingResult;
   VoiceCommandErrorCallback? _pendingError;
@@ -66,11 +66,13 @@ class VoiceCommandService {
 
     try {
       await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: IntentRecognizer.sampleRate,
+          bitRate: 128000,
+          numChannels: 1,
+        ),
         path: filePath,
-        encoder: AudioEncoder.wav,
-        samplingRate: IntentRecognizer.sampleRate,
-        bitRate: 128000,
-        numChannels: 1,
       );
     } catch (error, stackTrace) {
       debugPrint('Error al iniciar la grabación: $error\n$stackTrace');
@@ -151,7 +153,7 @@ class VoiceCommandService {
     _autoStopTimer?.cancel();
     _autoStopTimer = null;
     try {
-      await _recorder.stop();
+      await _recorder.cancel();
     } catch (error, stackTrace) {
       debugPrint('Error al cancelar la grabación: $error\n$stackTrace');
     }

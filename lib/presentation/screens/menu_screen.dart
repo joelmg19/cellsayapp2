@@ -20,7 +20,7 @@ class MenuScreen extends StatefulWidget {
 class _MenuScreenState extends State<MenuScreen> {
   final _tts = FlutterTts();
   final _intentRecognizer = IntentRecognizer();
-  final Record _recorder = Record();
+  final AudioRecorder _recorder = AudioRecorder();
   final _weather = WeatherService();
   bool _isListening = false;
   bool _isRecognizerReady = false;
@@ -133,11 +133,13 @@ class _MenuScreenState extends State<MenuScreen> {
     );
     try {
       await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: IntentRecognizer.sampleRate,
+          bitRate: 128000,
+          numChannels: 1,
+        ),
         path: filePath,
-        encoder: AudioEncoder.wav,
-        samplingRate: IntentRecognizer.sampleRate,
-        bitRate: 128000,
-        numChannels: 1,
       );
     } catch (error) {
       debugPrint('Error al iniciar captura de audio del menú: $error');
@@ -236,7 +238,7 @@ class _MenuScreenState extends State<MenuScreen> {
   void dispose() {
     _tts.stop();
     _intentRecognizer.dispose();
-    _recorder.dispose();
+    unawaited(_recorder.dispose());
     super.dispose();
   }
 
