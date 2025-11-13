@@ -7,7 +7,6 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:tflite_flutter_helper/tflite_flutter_helper.dart';
 
 /// High-level intent group used by the voice command model.
 enum IntentGroup {
@@ -63,12 +62,15 @@ class IntentRecognizer {
   final double probabilityThreshold;
 
   Interpreter? _interpreter;
-  TensorBuffer? _inputBuffer;
-  TensorBuffer? _outputBuffer;
   List<String> _labels = const [];
   MfccProcessor? _mfcc;
   List<int>? _inputShape;
   List<int>? _outputShape;
+  // Nota: eliminamos la dependencia de tflite_flutter_helper para evitar
+  // incompatibilidades con camera; por ello gestionamos manualmente los buffers
+  // del intérprete usando tflite_flutter puro.
+  TfLiteType? _inputType;
+  TfLiteType? _outputType;
   bool _isInitialized = false;
 
   bool get isInitialized => _isInitialized;
@@ -92,15 +94,8 @@ class IntentRecognizer {
       final outputTensor = interpreter.getOutputTensor(0);
       _inputShape = List<int>.from(inputTensor.shape);
       _outputShape = List<int>.from(outputTensor.shape);
-
-      _inputBuffer = TensorBuffer.createFixedSize(
-        _inputShape!,
-        inputTensor.type,
-      );
-      _outputBuffer = TensorBuffer.createFixedSize(
-        _outputShape!,
-        outputTensor.type,
-      );
+      _inputType = inputTensor.type;
+      _outputType = outputTensor.type;
 
       _labels = await _loadLabels();
       _mfcc = _buildMfccProcessor(_inputShape!);
@@ -120,8 +115,8 @@ class IntentRecognizer {
       // ignore
     }
     _interpreter = null;
-    _inputBuffer = null;
-    _outputBuffer = null;
+    _inputType = null;
+    _outputType = null;
     _mfcc = null;
     _inputShape = null;
     _outputShape = null;
@@ -139,26 +134,37 @@ class IntentRecognizer {
     }
     final interpreter = _interpreter;
     final mfcc = _mfcc;
-    final inputBuffer = _inputBuffer;
-    final outputBuffer = _outputBuffer;
-    if (interpreter == null || mfcc == null || inputBuffer == null || outputBuffer == null) {
+    final inputShape = _inputShape;
+    final outputShape = _outputShape;
+    if (interpreter == null || mfcc == null || inputShape == null || outputShape == null) {
       throw StateError('IntentRecognizer is not initialized.');
+    }
+
+    if (_inputType != TfLiteType.float32 || _outputType != TfLiteType.float32) {
+      throw UnsupportedError('Solo se soportan modelos de tipo float32.');
     }
 
     final normalized = _prepareInputAudio(audioSamples);
     final features = mfcc.process(normalized);
 
-    final requiredLength = _inputShape!.fold<int>(1, (value, element) => value * element);
+    final requiredLength = inputShape.fold<int>(1, (value, element) => value * element);
     if (features.length != requiredLength) {
       throw StateError(
         'MFCC feature length ${features.length} does not match interpreter input length $requiredLength.',
       );
     }
 
-    inputBuffer.loadList(features);
-    interpreter.run(inputBuffer.buffer, outputBuffer.buffer);
+    final inputTensor = interpreter.getInputTensor(0);
+    final inputData = Float32List.fromList(features);
+    inputTensor.copyFromBuffer(inputData.buffer);
 
-    final scores = outputBuffer.getDoubleList();
+    interpreter.invoke();
+
+    final outputTensor = interpreter.getOutputTensor(0);
+    final outputLength = outputShape.fold<int>(1, (value, element) => value * element);
+    final outputData = Float32List(outputLength);
+    outputTensor.copyToBuffer(outputData.buffer);
+    final scores = outputData.toList();
     final probabilities = _softmax(scores);
 
     final maxScore = probabilities.reduce(max);
