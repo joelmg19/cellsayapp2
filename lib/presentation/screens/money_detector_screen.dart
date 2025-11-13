@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+// image ^4.x mantiene compatibilidad con flutter_launcher_icons 0.14.4.
+// Si se cambia el generador de íconos, alinea la versión para evitar conflictos.
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 

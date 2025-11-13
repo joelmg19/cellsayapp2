@@ -14,6 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ultralytics_yolo/models/yolo_result.dart';
 import 'package:ultralytics_yolo/utils/error_handler.dart';
 import 'package:ultralytics_yolo/widgets/yolo_controller.dart';
+// image ^4.x es necesario para coexistir con flutter_launcher_icons 0.14.4.
+// Ajusta ambas dependencias juntas cuando se actualice la herramienta de íconos.
 import 'package:image/image.dart' as img;
 
 import '../../core/vision/cartel_labels.dart';
