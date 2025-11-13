@@ -29,6 +29,7 @@ import '../../services/depth_inference_service.dart';
 import '../../services/model_manager.dart'; // Import de tu ModelManager
 import '../../services/voice_announcer.dart';
 import '../../services/voice_command_service.dart';
+import '../../services/intent_recognizer.dart';
 import '../../services/weather_service.dart';
 
 /// Controller that manages the state and business logic for camera inference
@@ -67,6 +68,10 @@ class CameraInferenceController extends ChangeNotifier {
   double _fontScale = 1.0;
   VoiceSettings _voiceSettings = const VoiceSettings();
   String? _voiceCommandStatus;
+  static const double _intentConfidenceThreshold = 0.6;
+  static const double _zoomStep = 0.2;
+  static const double _minZoomLevel = 1.0;
+  static const double _maxZoomLevel = 6.0;
   bool _areControlsLocked = false;
   bool _isListeningForCommand = false;
   bool _isVoiceFeedbackPaused = false;
@@ -75,7 +80,8 @@ class CameraInferenceController extends ChangeNotifier {
   late final ModelManager _modelManager;
   final DetectionPostProcessor _postProcessor = DetectionPostProcessor();
   final VoiceAnnouncer _voiceAnnouncer = VoiceAnnouncer();
-  final VoiceCommandService _voiceCommandService = VoiceCommandService();
+  final IntentRecognizer _intentRecognizer = IntentRecognizer();
+  late final VoiceCommandService _voiceCommandService;
   final WeatherService _weatherService = WeatherService();
   final DistanceEstimatorProvider _distanceEstimatorProvider =
   DistanceEstimatorProvider();
@@ -148,6 +154,7 @@ class CameraInferenceController extends ChangeNotifier {
       : _selectedModel = initialModel,
         _confidenceThreshold = _defaultConfidence(initialModel),
         _numItemsThreshold = _defaultNumItems(initialModel) {
+    _voiceCommandService = VoiceCommandService(recognizer: _intentRecognizer);
     _modelManager = ModelManager(
       onDownloadProgress: (progress) {
         _downloadProgress = progress;
@@ -859,181 +866,91 @@ class CameraInferenceController extends ChangeNotifier {
     await _refreshWeather(force: true);
   }
 
-  Future<void> handleVoiceCommand(String command) async {
+  Future<void> handleVoiceCommand(IntentRecognitionResult result) async {
     if (_isDisposed) return;
 
-    final normalized = _normalizeVoiceCommand(command);
-    if (normalized.isEmpty) {
+    final confidence = result.score;
+    if (confidence < _intentConfidenceThreshold) {
+      await _handleUnrecognizedVoiceCommand();
       return;
     }
 
+    final label = result.label.toLowerCase();
     String? feedback;
-    bool recognized = false;
-    bool repeatInstruction = false;
+    var recognized = true;
 
-    final textKeywords = [
-      'letra',
-      'letras',
-      'fuente',
-      'texto',
-      'tamano',
-      'tamanos'
-    ];
-    final voiceKeywords = ['voz', 'narr', 'locucion', 'audio', 'asistente'];
-
-    if (_commandContainsAny(normalized, [
-      'repite',
-      'repitelo',
-      'repetir',
-      'otra vez',
-      'dilo de nuevo',
-      'vuelve a decirlo',
-      'repeti',
-      'otra vez por favor',
-    ])) {
-      recognized = true;
-      feedback = 'Repitiendo la última instrucción.';
-      repeatInstruction = true;
-    } else if (_commandContainsAny(normalized, [
-      'sube',
-      'aumenta',
-      'incrementa',
-      'incrementar',
-      'agranda',
-      'agrandalo',
-      'amplia',
-      'amplialo',
-      'haz mas grande',
-      'mas grande',
-      'eleva',
-      'subir',
-      'crece',
-      'agrandar',
-    ]) &&
-        _commandContainsAny(normalized, textKeywords)) {
-      recognized = true;
-      increaseFontScale();
-      feedback = 'Aumentando tamaño de texto.';
-    } else if (_commandContainsAny(normalized, [
-      'baja',
-      'bajar',
-      'disminuye',
-      'disminuir',
-      'reduce',
-      'reducir',
-      'achica',
-      'haz mas pequeno',
-      'mas pequeno',
-      'mas chico',
-      'mas chiquito',
-      'decrementa',
-      'menor',
-      'encoge',
-    ]) &&
-        _commandContainsAny(normalized, textKeywords)) {
-      recognized = true;
-      decreaseFontScale();
-      feedback = 'Reduciendo tamaño de texto.';
-    } else if (_commandContainsAny(normalized, [
-      'ayuda',
-      'ayudame',
-      'que puedes hacer',
-      'opciones',
-      'comandos disponibles',
-      'que haces',
-    ])) {
-      recognized = true;
-      feedback =
-      'Puedes pedirme que repita instrucciones, cambiar el tamaño de texto, activar o desactivar la narración, conocer los objetos detectados, preguntar la hora o consultar el clima.';
-    } else if (_commandContainsAny(normalized, [
-      'activa',
-      'enciende',
-      'habilita',
-      'activar',
-      'pon',
-      'enciendelo',
-      'prende'
-    ]) &&
-        _commandContainsAny(normalized, voiceKeywords)) {
-      recognized = true;
-      if (_isVoiceEnabled) {
-        feedback = 'La narración ya está activada.';
-      } else {
-        toggleVoice(announce: false);
-        feedback = 'Narración activada.';
-      }
-    } else if (_commandContainsAny(normalized, [
-      'desactiva',
-      'apaga',
-      'silencia',
-      'silencio',
-      'deshabilita',
-      'quita',
-      'calla',
-      'apagala'
-    ]) &&
-        _commandContainsAny(normalized, voiceKeywords)) {
-      recognized = true;
-      if (_isVoiceEnabled) {
-        toggleVoice(announce: false);
-        feedback = 'Narración desactivada.';
-      } else {
-        feedback = 'La narración ya estaba desactivada.';
-      }
-    } else if (_commandContainsAny(normalized, [
-      'detecta',
-      'deteccion',
-      'objeto',
-      'que ves',
-      'que miras',
-      'que observas',
-      'que hay',
-      'que se ve',
-      'cuantos objetos',
-      'que detectas',
-      'que identificas',
-    ])) {
-      recognized = true;
-      final count = _detectionCount;
-      final objectLabel = count == 1 ? 'objeto' : 'objetos';
-      final detectionMessage =
-      count > 0 ? 'Detecto $count $objectLabel.' : 'No detecto objetos ahora.';
-      feedback = detectionMessage;
-    } else if (_commandContainsAny(normalized, [
-      'hora',
-      'que hora es',
-      'dime la hora',
-      'hora actual',
-      'hora por favor',
-      'dame la hora',
-      'que hora tienes',
-    ])) {
-      recognized = true;
-      final timeMessage = 'Son las $formattedTime.';
-      feedback = timeMessage;
-    } else if (_commandContainsAny(normalized, [
-      'clima',
-      'tiempo',
-      'pronostico',
-      'temperatura',
-      'como esta el clima',
-      'como esta el tiempo',
-      'pronostico del tiempo',
-      'que temperatura hay',
-    ])) {
-      recognized = true;
-      feedback = 'Actualizando clima.';
-      unawaited(refreshWeather());
+    switch (result.group) {
+      case IntentGroup.camaraRepetir:
+        feedback = 'Repitiendo la última instrucción.';
+        await repeatLastInstruction();
+        break;
+      case IntentGroup.camaraTexto:
+        if (_labelIndicatesDecrease(label)) {
+          decreaseFontScale();
+          feedback = 'Tamaño de texto reducido.';
+        } else {
+          increaseFontScale();
+          feedback = 'Tamaño de texto aumentado.';
+        }
+        break;
+      case IntentGroup.camaraVoz:
+        final enable = _labelIndicatesEnable(label);
+        final disable = _labelIndicatesDisable(label);
+        if (enable && !_isVoiceEnabled) {
+          toggleVoice(announce: false);
+          feedback = 'Narración activada.';
+        } else if (disable && _isVoiceEnabled) {
+          toggleVoice(announce: false);
+          feedback = 'Narración desactivada.';
+        } else if (enable && _isVoiceEnabled) {
+          feedback = 'La narración ya está activada.';
+        } else if (disable && !_isVoiceEnabled) {
+          feedback = 'La narración ya estaba desactivada.';
+        } else {
+          recognized = false;
+        }
+        break;
+      case IntentGroup.camaraAyuda:
+        feedback =
+            'Puedes pedirme que repita instrucciones, cambiar el tamaño de texto, activar o desactivar la narración, controlar el lector de carteles, ajustar el zoom, preguntar la hora o consultar el clima.';
+        break;
+      case IntentGroup.camaraZoom:
+        final zoomOut =
+            _labelIndicatesDecrease(label) || label.contains('aleja') || label.contains('alejar');
+        _adjustZoomLevel(zoomOut ? -_zoomStep : _zoomStep);
+        feedback = zoomOut ? 'Alejando zoom.' : 'Acercando zoom.';
+        break;
+      case IntentGroup.camaraLectorCarteles:
+        feedback = _handleSignReaderCommand(label);
+        if (feedback == null) {
+          recognized = false;
+        }
+        break;
+      case IntentGroup.menu:
+        feedback = 'Opciones disponibles: Dinero, Objetos, Profundidad, Lectura, Hora y Clima.';
+        break;
+      case IntentGroup.hora:
+        feedback = 'Son las $formattedTime.';
+        break;
+      case IntentGroup.clima:
+        feedback = 'Actualizando clima.';
+        unawaited(refreshWeather());
+        break;
+      case IntentGroup.dinero:
+      case IntentGroup.profundidad:
+      case IntentGroup.lectura:
+        feedback = 'Para cambiar de modo regresa al menú principal.';
+        break;
+      case IntentGroup.objetos:
+        feedback = _buildDetectionSummary();
+        break;
+      case IntentGroup.unknown:
+        recognized = false;
+        break;
     }
 
     if (!recognized) {
-      _voiceCommandStatus = 'Comando no reconocido.';
-      notifyListeners();
-      await _announceSystemMessage(
-        'No entendí el comando.',
-        force: true,
-        bypassCooldown: true,
-      );
+      await _handleUnrecognizedVoiceCommand();
       return;
     }
 
@@ -1047,36 +964,108 @@ class CameraInferenceController extends ChangeNotifier {
         bypassCooldown: true,
       );
     }
+  }
 
-    if (repeatInstruction) {
-      await repeatLastInstruction();
+  Future<void> _handleUnrecognizedVoiceCommand() async {
+    _voiceCommandStatus = 'Comando no reconocido.';
+    notifyListeners();
+    await _announceSystemMessage(
+      'No entendí el comando. Por favor, repítelo.',
+      force: true,
+      bypassCooldown: true,
+    );
+  }
+
+  String _buildDetectionSummary() {
+    final count = _detectionCount;
+    if (count <= 0) {
+      return 'No detecto objetos ahora.';
     }
+    final label = count == 1 ? 'objeto' : 'objetos';
+    return 'Detecto $count $label.';
   }
 
-  String _normalizeVoiceCommand(String command) {
-    var normalized = command.toLowerCase();
-    normalized = normalized
-        .replaceAll(RegExp(r'[^a-z0-9áéíóúüñ ]'), ' ')
-        .replaceAll('á', 'a')
-        .replaceAll('é', 'e')
-        .replaceAll('í', 'i')
-        .replaceAll('ó', 'o')
-        .replaceAll('ú', 'u')
-        .replaceAll('ü', 'u')
-        .replaceAll('ñ', 'n')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    return normalized;
+  void _adjustZoomLevel(double delta) {
+    final newZoom = (_currentZoomLevel + delta).clamp(_minZoomLevel, _maxZoomLevel);
+    setZoomLevel(newZoom);
   }
 
-  bool _commandContainsAny(String text, Iterable<String> patterns) {
-    for (final pattern in patterns) {
-      if (pattern.isEmpty) continue;
-      if (text.contains(pattern)) {
-        return true;
+  String? _handleSignReaderCommand(String label) {
+    final enable = _labelIndicatesEnable(label);
+    final disable = _labelIndicatesDisable(label);
+
+    if (enable && !disable) {
+      final wasEnabled = _isSignReaderEnabled;
+      setSignReaderEnabled(true);
+      if (_isSignReaderEnabled && !wasEnabled) {
+        return 'Lector de carteles activado.';
       }
+      if (_isSignReaderEnabled) {
+        return 'El lector de carteles ya estaba activado.';
+      }
+      return 'No se pudo activar el lector de carteles.';
     }
-    return false;
+
+    if (disable && !enable) {
+      final wasEnabled = _isSignReaderEnabled;
+      setSignReaderEnabled(false);
+      if (!_isSignReaderEnabled && wasEnabled) {
+        return 'Lector de carteles desactivado.';
+      }
+      if (!_isSignReaderEnabled) {
+        return 'El lector de carteles ya estaba desactivado.';
+      }
+      return 'No se pudo desactivar el lector de carteles.';
+    }
+
+    return null;
+  }
+
+  bool _labelIndicatesDecrease(String label) {
+    const keywords = [
+      'baja',
+      'dismin',
+      'reduce',
+      'achica',
+      'menos',
+      'pequen',
+      'pequeñ',
+      'aleja',
+      'alejar',
+      'decrementa',
+    ];
+    return keywords.any(label.contains);
+  }
+
+  bool _labelIndicatesEnable(String label) {
+    const keywords = [
+      'activa',
+      'activar',
+      'enciende',
+      'encender',
+      'habilita',
+      'habilitar',
+      'prende',
+      'prender',
+    ];
+    return keywords.any(label.contains);
+  }
+
+  bool _labelIndicatesDisable(String label) {
+    const keywords = [
+      'desactiva',
+      'desactivar',
+      'apaga',
+      'apagar',
+      'silencia',
+      'silenciar',
+      'deshabilita',
+      'deshabilitar',
+      'quita',
+      'quitar',
+      'cierra',
+    ];
+    return keywords.any(label.contains);
   }
 
   Future<void> _startVoiceCommand() async {
@@ -1088,12 +1077,13 @@ class CameraInferenceController extends ChangeNotifier {
     notifyListeners();
 
     final started = await _voiceCommandService.startListening(
-      onResult: (text) {
+      listenFor: const Duration(seconds: 2),
+      onResult: (result) {
         if (_isDisposed) return;
         _isListeningForCommand = false;
         _setVoiceFeedbackPaused(false);
         notifyListeners();
-        unawaited(_processVoiceCommandResult(text));
+        unawaited(_processVoiceCommandResult(result));
       },
       onError: (message) {
         if (_isDisposed) return;
@@ -1143,12 +1133,14 @@ class CameraInferenceController extends ChangeNotifier {
     }
   }
 
-  Future<void> _processVoiceCommandResult(String text) async {
+  Future<void> _processVoiceCommandResult(
+    IntentRecognitionResult result,
+  ) async {
     if (_isDisposed) return;
 
     _isProcessingVoiceCommand = true;
     try {
-      await handleVoiceCommand(text);
+      await handleVoiceCommand(result);
     } finally {
       if (_isDisposed) {
         // No hacer nada si está 'disposed'
@@ -1509,6 +1501,7 @@ class CameraInferenceController extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _voiceAnnouncer.dispose();
+    unawaited(_intentRecognizer.dispose());
     _statusTimer?.cancel();
     _voiceResumeTimer?.cancel();
     _voiceResumeTimer = null;

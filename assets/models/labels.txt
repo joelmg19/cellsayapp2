@@ -1,0 +1,172 @@
+menu
+opciones
+ayuda
+ayuda por favor
+que opciones tengo
+de que es la aplicacion
+que puedes hacer
+que hace esta app
+explica opciones
+leer opciones
+lee el menu
+instrucciones
+dinero
+contar dinero
+detectar dinero
+reconocer dinero
+billetes
+monedas
+cuanto dinero hay
+es billete
+es moneda
+leer dinero
+ver dinero
+dinero por favor
+abrir dinero
+modo dinero
+analizar dinero
+identificar dinero
+clasificar dinero
+quiero dinero
+ayuda dinero
+menu dinero
+objetos
+detectar objetos
+reconocer objetos
+identificar objetos
+camara
+abrir camara
+modo camara
+encender camara
+analizar objeto
+es un objeto
+leer objeto
+ver objeto
+buscar objeto
+enfocar objeto
+clasificar objeto
+objetos por favor
+camara por favor
+menu objetos
+modo objetos
+quiero objetos
+profundidad
+medir profundidad
+distancia
+cercania
+lejos o cerca
+que tan lejos
+sensor de profundidad
+modo profundidad
+activar profundidad
+abrir profundidad
+ver profundidad
+medir distancia
+profundidad por favor
+quiero profundidad
+analizar profundidad
+distancia por favor
+indicador de distancia
+distancia del objeto
+lectura
+leer texto
+leer documento
+leer etiqueta
+leer menu
+lector de texto
+abrir lectura
+modo lectura
+leer pantalla
+leer por favor
+quiero leer
+detectar texto
+ocr
+texto
+leer imagen
+leer letrero
+leer cartel
+leer ticket
+leer recibo
+leer boleta
+leer nota
+leer pagina
+lectura por favor
+menu lectura
+hora
+dime la hora
+que hora es
+hora actual
+hora por favor
+hora ahora
+reloj
+dime la hora actual
+quiero la hora
+que hora tengo
+clima
+clima de hoy
+que clima hay
+como esta el clima
+tiempo
+pronostico
+temperatura
+clima por favor
+dime el clima
+que temperatura hay
+clima actual
+como esta el tiempo
+esta lloviendo
+va a llover
+hace frio
+hace calor
+ayuda camara
+opciones de camara
+menu de camara
+ayuda en camara
+ayuda en deteccion
+que puedo hacer aqui
+que opciones tengo aqui
+que haces aqui
+que puedes hacer aqui
+explica opciones de camara
+activar lector de carteles
+encender lector de carteles
+habilitar lector de carteles
+activar lector
+encender lector
+prender lector de carteles
+desactivar lector de carteles
+apagar lector de carteles
+deshabilitar lector de carteles
+quitar lector de carteles
+apagar lector
+desactivar lector
+aumentar texto
+subir texto
+texto mas grande
+agrandar texto
+incrementar tamaño de texto
+disminuir texto
+bajar texto
+texto mas pequeño
+reducir tamaño de texto
+achicar texto
+activar voz
+encender voz
+activar narracion
+encender narracion
+habilitar narracion
+desactivar voz
+apagar voz
+desactivar narracion
+apagar narracion
+silenciar voz
+zoom
+cambiar zoom
+aumentar zoom
+disminuir zoom
+repite
+repetir
+repitelo
+otra vez
+vuelve a decirlo
+dilo de nuevo
