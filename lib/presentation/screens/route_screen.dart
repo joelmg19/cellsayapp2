@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -17,25 +18,31 @@ class RouteScreen extends StatefulWidget {
   State<RouteScreen> createState() => _RouteScreenState();
 }
 
+enum SuggestionState { idle, loading, empty, error, ready }
+
 class _RouteScreenState extends State<RouteScreen> {
   final _mapController = MapController();
   final _routeService = RouteService();
   final _transitService = ChileTransitService();
   final _tts = FlutterTts();
   final _destinationController = TextEditingController();
+  final _destinationFocus = FocusNode();
   final DateFormat _timeFormat = DateFormat('HH:mm');
 
   LatLng? _userLocation;
   LatLng? _destination;
   RoutePlan? _routePlan;
   List<TransitVehicle> _vehicles = const [];
+  List<PlaceSuggestion> _suggestions = const [];
 
   StreamSubscription<Position>? _positionSub;
   bool _isLocating = false;
-  bool _searching = false;
   bool _planning = false;
   bool _loadingTransit = false;
   int _stepIndex = 0;
+  SuggestionState _suggestionState = SuggestionState.idle;
+  Timer? _debounce;
+  CancellationToken? _searchToken;
 
   String? _status;
 
@@ -43,6 +50,14 @@ class _RouteScreenState extends State<RouteScreen> {
   void initState() {
     super.initState();
     _configureTts();
+    _destinationFocus.addListener(() {
+      if (!_destinationFocus.hasFocus) {
+        setState(() {
+          _suggestionState = SuggestionState.idle;
+          _suggestions = const [];
+        });
+      }
+    });
     _locateUser();
   }
 
@@ -55,7 +70,7 @@ class _RouteScreenState extends State<RouteScreen> {
   Future<void> _locateUser() async {
     setState(() {
       _isLocating = true;
-      _status = 'Obteniendo tu ubicación…';
+      _status = 'Obteniendo tu ubicación… (cargando)';
     });
     final hasPermission = await _ensurePermission();
     if (!hasPermission) {
@@ -70,7 +85,7 @@ class _RouteScreenState extends State<RouteScreen> {
     setState(() {
       _userLocation = userPoint;
       _isLocating = false;
-      _status = 'Ubicación lista. Ingresa o dicta tu destino.';
+      _status = 'Ubicación lista. Estado: listo. Ingresa o dicta tu destino.';
     });
     _mapController.move(userPoint, 16);
     _subscribeToPosition();
@@ -105,54 +120,82 @@ class _RouteScreenState extends State<RouteScreen> {
   }
 
   Future<void> _searchDestination() async {
+    await _triggerAutocomplete(force: true);
+    if (_suggestions.isEmpty) {
+      setState(() => _status = 'Estado búsqueda: sin resultados.');
+      return;
+    }
+    await _selectSuggestion(_suggestions.first);
+  }
+
+  void _onDestinationChanged(String value) {
+    _debounce?.cancel();
+    _searchToken?.cancel();
+    if (value.trim().isEmpty) {
+      setState(() {
+        _suggestions = const [];
+        _suggestionState = SuggestionState.idle;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_triggerAutocomplete());
+    });
+  }
+
+  Future<void> _triggerAutocomplete({bool force = false}) async {
+    if (!force && !_destinationFocus.hasFocus) {
+      return;
+    }
     final query = _destinationController.text.trim();
     if (query.isEmpty) {
-      setState(() => _status = 'Escribe un destino.');
+      setState(() {
+        _suggestionState = SuggestionState.idle;
+        _suggestions = const [];
+      });
       return;
     }
+    _searchToken?.cancel();
+    final token = CancellationToken();
+    _searchToken = token;
     setState(() {
-      _searching = true;
-      _status = 'Buscando destino en mapas libres…';
+      _suggestionState = SuggestionState.loading;
+      _status = 'Estado búsqueda: cargando.';
     });
-    final places = await _routeService.searchPlaces(query);
-    setState(() => _searching = false);
-    if (places.isEmpty) {
-      setState(() => _status = 'No encontré coincidencias. Intenta con otro nombre.');
-      return;
+    try {
+      final places = await _routeService.searchPlaces(query, bias: _userLocation, token: token);
+      if (!mounted || token.isCancelled) return;
+      setState(() {
+        _suggestions = places.take(8).toList();
+        _suggestionState = _suggestions.isEmpty ? SuggestionState.empty : SuggestionState.ready;
+        _status = _suggestionState == SuggestionState.ready
+            ? 'Estado búsqueda: listo. Selecciona un destino.'
+            : 'Estado búsqueda: sin resultados.';
+      });
+    } catch (e, st) {
+      developer.log('Autocomplete failure $e', name: '[ROUTE]', stackTrace: st);
+      if (!mounted || token.isCancelled) return;
+      setState(() {
+        _suggestionState = SuggestionState.error;
+        _suggestions = const [];
+        _status = 'Estado búsqueda: error.';
+      });
+      _showSnack('No pude obtener sugerencias de destino.');
     }
-    PlaceSuggestion? selected;
-    if (places.length == 1) {
-      selected = places.first;
-    } else if (!mounted) {
-      return;
-    } else {
-      selected = await showModalBottomSheet<PlaceSuggestion>(
-        context: context,
-        builder: (_) => SafeArea(
-          child: ListView.separated(
-            shrinkWrap: true,
-            itemBuilder: (context, index) {
-              final place = places[index];
-              return ListTile(
-                title: Text(place.name),
-                subtitle: Text(place.address),
-                onTap: () => Navigator.of(context).pop(place),
-              );
-            },
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemCount: places.length,
-          ),
-        ),
-      );
-    }
-    if (selected == null) return;
-    final chosen = selected!;
+  }
+
+  Future<void> _selectSuggestion(PlaceSuggestion suggestion) async {
+    _destinationController.text = suggestion.name;
+    _destinationFocus.unfocus();
     setState(() {
-      _destination = chosen.point;
-      _status = 'Destino seleccionado: ${chosen.name}';
+      _suggestions = const [];
+      _suggestionState = SuggestionState.idle;
+      _destination = suggestion.point;
+      _status = 'Destino seleccionado: ${suggestion.name}. Recalculando (listo cuando finalice)…';
     });
-    _mapController.move(chosen.point, 16);
-    await _tts.speak('Destino ${chosen.name} elegido.');
+    _mapController.move(suggestion.point, 16);
+    await _tts.speak('Destino ${suggestion.name} elegido.');
+    await _planRoute();
   }
 
   Future<void> _planRoute() async {
@@ -162,16 +205,17 @@ class _RouteScreenState extends State<RouteScreen> {
     }
     setState(() {
       _planning = true;
-      _status = 'Calculando ruta peatonal con mapas abiertos…';
+      _status = 'Calculando ruta peatonal con mapas abiertos… (cargando)';
     });
     final plan = await _routeService.buildRoute(origin: _userLocation!, destination: _destination!);
     setState(() {
       _planning = false;
       _routePlan = plan;
       _stepIndex = 0;
-      _status = plan == null ? 'No pude trazar ruta.' : 'Ruta lista. Sigue las indicaciones.';
+      _status = plan == null ? 'No pude trazar ruta. (error)' : 'Ruta lista. Sigue las indicaciones.';
     });
     if (plan == null) {
+      _showSnack('No logré construir la ruta.');
       await _tts.speak('No pude generar la ruta.');
       return;
     }
@@ -188,22 +232,40 @@ class _RouteScreenState extends State<RouteScreen> {
     }
     setState(() {
       _loadingTransit = true;
-      _status = 'Consultando datos abiertos de Red y Metro…';
+      _status = 'Consultando datos abiertos de Red y Metro… (cargando)';
     });
-    final vehicles = await _transitService.fetchVehicles(userPosition: _userLocation!, radiusMeters: 2500);
-    setState(() {
-      _loadingTransit = false;
-      _vehicles = vehicles;
-      _status = vehicles.isEmpty
-          ? 'No encontré vehículos cercanos en tiempo real.'
-          : 'Hay ${vehicles.length} servicios cercanos.';
-    });
-    if (vehicles.isEmpty) {
-      await _tts.speak('No detecté buses o metro cercanos.');
-    } else {
-      final busCount = vehicles.where((v) => v.mode == TransitMode.bus).length;
-      final metroCount = vehicles.where((v) => v.mode == TransitMode.metro).length;
-      await _tts.speak('Detecté $busCount micros y $metroCount trenes en tu zona.');
+    try {
+      final vehicles = await _transitService.fetchVehicles(userPosition: _userLocation!, radiusMeters: 2500);
+      setState(() {
+        _loadingTransit = false;
+        _vehicles = vehicles;
+        _status = vehicles.isEmpty
+            ? 'No encontré vehículos cercanos en tiempo real. (sin-resultados)'
+            : 'Hay ${vehicles.length} servicios cercanos. (listo)';
+      });
+      if (vehicles.isEmpty) {
+        await _tts.speak('No detecté buses o metro cercanos.');
+      } else {
+        final busCount = vehicles.where((v) => v.mode == TransitMode.bus).length;
+        final metroCount = vehicles.where((v) => v.mode == TransitMode.metro).length;
+        await _tts.speak('Detecté $busCount micros y $metroCount trenes en tu zona.');
+      }
+    } on TransitDataUnavailable catch (e) {
+      developer.log('Transit unavailable: $e', name: '[ROUTE]');
+      setState(() {
+        _loadingTransit = false;
+        _vehicles = const [];
+        _status = 'Sin datos de transporte en vivo ahora.';
+      });
+      _showSnack('Sin datos de transporte en vivo ahora.');
+    } catch (e, st) {
+      developer.log('Transit error $e', name: '[ROUTE]', stackTrace: st);
+      setState(() {
+        _loadingTransit = false;
+        _vehicles = const [];
+        _status = 'Sin datos de transporte en vivo ahora.';
+      });
+      _showSnack('Sin datos de transporte en vivo ahora.');
     }
   }
 
@@ -281,8 +343,18 @@ class _RouteScreenState extends State<RouteScreen> {
   void dispose() {
     _positionSub?.cancel();
     _destinationController.dispose();
+    _destinationFocus.dispose();
+    _debounce?.cancel();
+    _searchToken?.cancel();
     _tts.stop();
     super.dispose();
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -312,21 +384,26 @@ class _RouteScreenState extends State<RouteScreen> {
               children: [
                 TextField(
                   controller: _destinationController,
+                  focusNode: _destinationFocus,
                   decoration: InputDecoration(
                     labelText: 'Destino',
                     hintText: 'Ej: Metro Baquedano, Plaza, dirección…',
-                    suffixIcon: _searching
-                        ? const Padding(
-                            padding: EdgeInsets.all(12.0),
-                            child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.search),
-                            onPressed: _searchDestination,
-                          ),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: _searchDestination,
+                    ),
                   ),
                   onSubmitted: (_) => _searchDestination(),
+                  onChanged: _onDestinationChanged,
+                  textInputAction: TextInputAction.search,
                 ),
+                const SizedBox(height: 8),
+                if (_suggestionState != SuggestionState.idle)
+                  _SuggestionPanel(
+                    state: _suggestionState,
+                    suggestions: _suggestions,
+                    onSelected: _selectSuggestion,
+                  ),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 12,
@@ -421,6 +498,86 @@ class _RouteScreenState extends State<RouteScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SuggestionPanel extends StatelessWidget {
+  const _SuggestionPanel({
+    required this.state,
+    required this.suggestions,
+    required this.onSelected,
+  });
+
+  final SuggestionState state;
+  final List<PlaceSuggestion> suggestions;
+  final Future<void> Function(PlaceSuggestion) onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child;
+    switch (state) {
+      case SuggestionState.loading:
+        child = const Padding(
+          padding: EdgeInsets.all(12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 12),
+              Text('Buscando direcciones en Chile…'),
+            ],
+          ),
+        );
+        break;
+      case SuggestionState.empty:
+        child = const Padding(
+          padding: EdgeInsets.all(12),
+          child: Text('Sin resultados. Intenta con otro nombre.'),
+        );
+        break;
+      case SuggestionState.error:
+        child = const Padding(
+          padding: EdgeInsets.all(12),
+          child: Text('Error al obtener sugerencias.'),
+        );
+        break;
+      case SuggestionState.ready:
+        child = ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: suggestions.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (context, index) {
+            final place = suggestions[index];
+            return ListTile(
+              dense: true,
+              title: Text(place.name),
+              subtitle: Text(place.address),
+              onTap: () => unawaited(onSelected(place)),
+            );
+          },
+        );
+        break;
+      case SuggestionState.idle:
+      default:
+        child = const SizedBox.shrink();
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: Container(
+        key: ValueKey(state),
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 260),
+          child: child,
+        ),
       ),
     );
   }
