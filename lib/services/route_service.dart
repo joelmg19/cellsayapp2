@@ -87,7 +87,8 @@ class RouteService {
       if (response != null && response.statusCode == 200) {
         final body = jsonDecode(response.body);
         if (body is List) {
-          places = body.map<PlaceSuggestion>((raw) => _mapNominatimPlace(raw)).whereType<PlaceSuggestion>().toList();
+          places =
+              body.map<PlaceSuggestion?>((raw) => _mapNominatimPlace(raw)).whereType<PlaceSuggestion>().toList();
         }
       } else if (response != null && response.statusCode != 200) {
         developer.log('Nominatim error ${response.statusCode}: ${response.body}', name: '[ROUTE]');
