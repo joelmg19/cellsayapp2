@@ -1,7 +1,17 @@
+import 'dart:collection';
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+
+class CancellationToken {
+  bool _isCancelled = false;
+
+  bool get isCancelled => _isCancelled;
+
+  void cancel() => _isCancelled = true;
+}
 
 class PlaceSuggestion {
   final String name;
@@ -37,30 +47,69 @@ class RouteService {
   RouteService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
+  final _cache = _LruCache<String, List<PlaceSuggestion>>(32);
 
   static const _userAgent = 'CellSay Ruta/1.0 (+https://cellsay.cl)';
 
-  Future<List<PlaceSuggestion>> searchPlaces(String query) async {
-    final url = Uri.parse(
-      'https://nominatim.openstreetmap.org/search?format=json&limit=6&addressdetails=1&q=${Uri.encodeQueryComponent(query)}',
-    );
-    final response = await _client.get(url, headers: const {'User-Agent': _userAgent});
-    if (response.statusCode != 200) {
-      return [];
+  Future<List<PlaceSuggestion>> searchPlaces(
+    String query, {
+    LatLng? bias,
+    CancellationToken? token,
+  }) async {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) return const [];
+    final cacheKey = '${normalized}_${bias?.latitude.toStringAsFixed(2) ?? 'x'}_${bias?.longitude.toStringAsFixed(2) ?? 'y'}';
+    final cached = _cache.get(cacheKey);
+    if (cached != null) {
+      return cached;
     }
-    final data = jsonDecode(response.body);
-    if (data is! List) return [];
-    return data.map((raw) {
-      final lat = double.tryParse(raw['lat']?.toString() ?? '') ?? 0;
-      final lon = double.tryParse(raw['lon']?.toString() ?? '') ?? 0;
-      final display = raw['display_name']?.toString() ?? 'Destino';
-      final name = raw['namedetails']?['name']?.toString() ?? display.split(',').first;
-      return PlaceSuggestion(
-        name: name,
-        address: display,
-        point: LatLng(lat, lon),
-      );
-    }).toList();
+    final params = <String, String>{
+      'format': 'jsonv2',
+      'accept-language': 'es',
+      'limit': '8',
+      'countrycodes': 'cl',
+      'addressdetails': '1',
+      'namedetails': '1',
+      'dedupe': '1',
+      'q': normalized,
+    };
+    if (bias != null) {
+      params['lat'] = bias.latitude.toString();
+      params['lon'] = bias.longitude.toString();
+    }
+    final nominatimUri = Uri.https('nominatim.openstreetmap.org', '/search', params);
+    List<PlaceSuggestion> places = const [];
+    try {
+      final response = await _getWithRetries(nominatimUri, token: token);
+      if (token?.isCancelled ?? false) {
+        return const [];
+      }
+      if (response != null && response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        if (body is List) {
+          places =
+              body.map<PlaceSuggestion?>((raw) => _mapNominatimPlace(raw)).whereType<PlaceSuggestion>().toList();
+        }
+      } else if (response != null && response.statusCode != 200) {
+        developer.log('Nominatim error ${response.statusCode}: ${response.body}', name: '[ROUTE]');
+      }
+    } catch (e, st) {
+      developer.log('Nominatim exception $e', name: '[ROUTE]', stackTrace: st);
+    }
+    if ((places.isEmpty) && !(token?.isCancelled ?? false)) {
+      try {
+        places = await _fetchPhoton(normalized, bias: bias, token: token);
+      } catch (e, st) {
+        developer.log('Photon fallback error $e', name: '[ROUTE]', stackTrace: st);
+      }
+    }
+    if (token?.isCancelled ?? false) {
+      return const [];
+    }
+    if (places.isNotEmpty) {
+      _cache.set(cacheKey, places);
+    }
+    return places;
   }
 
   Future<RoutePlan?> buildRoute({required LatLng origin, required LatLng destination}) async {
@@ -68,26 +117,171 @@ class RouteService {
       'https://router.project-osrm.org/route/v1/foot/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}'
       '?overview=full&geometries=geojson&steps=true&annotations=true',
     );
-    final response = await _client.get(url, headers: const {'User-Agent': _userAgent});
-    if (response.statusCode != 200) return null;
-    final body = jsonDecode(response.body);
-    final routes = body['routes'];
-    if (routes is! List || routes.isEmpty) return null;
-    final best = routes.first;
-    final geometry = best['geometry'];
-    final coordinates = geometry?['coordinates'];
-    final List<LatLng> path = [
-      if (coordinates is List)
-        for (final pair in coordinates)
-          if (pair is List && pair.length >= 2) LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble()),
-    ];
-    final instructions = _extractInstructions(best);
-    return RoutePlan(
-      path: path,
-      instructions: instructions,
-      distanceMeters: (best['distance'] as num?)?.toDouble() ?? 0,
-      durationSeconds: (best['duration'] as num?)?.toDouble() ?? 0,
+    try {
+      final response = await _client
+          .get(url, headers: const {'User-Agent': _userAgent})
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final body = jsonDecode(response.body);
+      final routes = body['routes'];
+      if (routes is! List || routes.isEmpty) return null;
+      final best = routes.first;
+      final geometry = best['geometry'];
+      final coordinates = geometry?['coordinates'];
+      final List<LatLng> path = [
+        if (coordinates is List)
+          for (final pair in coordinates)
+            if (pair is List && pair.length >= 2) LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble()),
+      ];
+      final instructions = _extractInstructions(best);
+      return RoutePlan(
+        path: path,
+        instructions: instructions,
+        distanceMeters: (best['distance'] as num?)?.toDouble() ?? 0,
+        durationSeconds: (best['duration'] as num?)?.toDouble() ?? 0,
+      );
+    } catch (e, st) {
+      developer.log('Route build error $e', name: '[ROUTE]', stackTrace: st);
+      return null;
+    }
+  }
+
+  Future<http.Response?> _getWithRetries(Uri uri, {CancellationToken? token, int retries = 2}) async {
+    var delay = const Duration(milliseconds: 500);
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      if (token?.isCancelled ?? false) {
+        return null;
+      }
+      try {
+        final response = await _client
+            .get(uri, headers: const {'User-Agent': _userAgent})
+            .timeout(const Duration(seconds: 7));
+        if (response.statusCode == 429 && attempt < retries) {
+          await Future.delayed(delay);
+          delay *= 2;
+          continue;
+        }
+        if (response.statusCode >= 500 && attempt < retries) {
+          await Future.delayed(delay);
+          delay *= 2;
+          continue;
+        }
+        return response;
+      } catch (e, st) {
+        developer.log('Nominatim request failed $e', name: '[ROUTE]', stackTrace: st);
+        if (attempt == retries) rethrow;
+        await Future.delayed(delay);
+        delay *= 2;
+      }
+    }
+    return null;
+  }
+
+  Future<List<PlaceSuggestion>> _fetchPhoton(
+    String query, {
+    LatLng? bias,
+    CancellationToken? token,
+  }) async {
+    final params = <String, String>{
+      'q': query,
+      'lang': 'es',
+      'limit': '8',
+      'osm_tag': 'amenity:*,highway:*,place:*',
+    };
+    if (bias != null) {
+      params['lat'] = bias.latitude.toString();
+      params['lon'] = bias.longitude.toString();
+    }
+    final uri = Uri.https('photon.komoot.io', '/api/', params);
+    final response = await _client
+        .get(uri, headers: const {'User-Agent': _userAgent})
+        .timeout(const Duration(seconds: 7));
+    if (token?.isCancelled ?? false) return const [];
+    if (response.statusCode != 200) {
+      developer.log('Photon responded ${response.statusCode}', name: '[ROUTE]');
+      return const [];
+    }
+    final Map<String, dynamic> body = jsonDecode(response.body);
+    final features = body['features'];
+    if (features is! List) return const [];
+    return features
+        .map<PlaceSuggestion?>((feature) => _mapPhotonPlace(feature))
+        .whereType<PlaceSuggestion>()
+        .toList();
+  }
+
+  PlaceSuggestion? _mapNominatimPlace(dynamic raw) {
+    final lat = double.tryParse(raw['lat']?.toString() ?? '');
+    final lon = double.tryParse(raw['lon']?.toString() ?? '');
+    if (lat == null || lon == null) return null;
+    final addressMap = raw['address'];
+    final address = _normalizeAddress(addressMap is Map ? addressMap : null, raw['display_name']?.toString());
+    final namedetails = raw['namedetails'];
+    final primaryName = namedetails is Map
+        ? (namedetails['name'] ?? namedetails['official_name'] ?? namedetails['short_name'])?.toString()
+        : null;
+    final display = primaryName ?? address.split(',').first;
+    return PlaceSuggestion(
+      name: display.trim().isEmpty ? 'Destino' : display,
+      address: address,
+      point: LatLng(lat, lon),
     );
+  }
+
+  PlaceSuggestion? _mapPhotonPlace(dynamic feature) {
+    if (feature is! Map) return null;
+    final geometry = feature['geometry'];
+    final coords = geometry is Map ? geometry['coordinates'] : null;
+    if (coords is! List || coords.length < 2) return null;
+    final properties = feature['properties'];
+    final lat = (coords[1] as num?)?.toDouble();
+    final lon = (coords[0] as num?)?.toDouble();
+    if (lat == null || lon == null) return null;
+    final name = properties is Map ? (properties['name'] ?? properties['street'] ?? 'Destino') : 'Destino';
+    final address = _normalizeAddress(
+      properties is Map
+          ? {
+              'road': properties['street'],
+              'house_number': properties['housenumber'],
+              'city': properties['city'] ?? properties['locality'],
+              'state': properties['state'],
+            }
+          : null,
+      properties is Map ? properties['name']?.toString() : null,
+    );
+    return PlaceSuggestion(
+      name: name.toString(),
+      address: address,
+      point: LatLng(lat, lon),
+    );
+  }
+
+  String _normalizeAddress(Map<dynamic, dynamic>? address, String? fallback) {
+    final parts = <String>[];
+    void add(String? value) {
+      if (value == null) return;
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return;
+      if (!parts.any((existing) => existing.toLowerCase() == trimmed.toLowerCase())) {
+        parts.add(trimmed);
+      }
+    }
+
+    if (address != null) {
+      add(address['road']?.toString() ?? address['pedestrian']?.toString());
+      add(address['house_number']?.toString());
+      add(address['neighbourhood']?.toString() ?? address['suburb']?.toString());
+      add(address['city_district']?.toString() ?? address['city']?.toString() ?? address['town']?.toString());
+      add(address['state']?.toString() ?? address['region']?.toString());
+      final country = address['country_code']?.toString().toUpperCase();
+      if (country == 'CL' || (address['country']?.toString().toLowerCase() == 'chile')) {
+        add('Chile');
+      }
+    }
+    if (parts.isEmpty && fallback != null) {
+      parts.add(fallback);
+    }
+    return parts.join(', ');
   }
 
   List<RouteInstruction> _extractInstructions(dynamic rawRoute) {
@@ -163,5 +357,30 @@ class RouteService {
       default:
         return '';
     }
+  }
+}
+
+class _LruCache<K, V> {
+  _LruCache(this.capacity);
+
+  final int capacity;
+  final _map = LinkedHashMap<K, V>();
+
+  V? get(K key) {
+    if (!_map.containsKey(key)) return null;
+    final value = _map.remove(key);
+    if (value != null) {
+      _map[key] = value;
+    }
+    return value;
+  }
+
+  void set(K key, V value) {
+    if (_map.length >= capacity && !_map.containsKey(key)) {
+      _map.remove(_map.keys.first);
+    } else if (_map.containsKey(key)) {
+      _map.remove(key);
+    }
+    _map[key] = value;
   }
 }
