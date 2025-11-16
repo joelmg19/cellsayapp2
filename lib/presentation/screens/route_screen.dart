@@ -413,11 +413,8 @@ class _RouteScreenState extends State<RouteScreen> {
   void _focusRouteOnMap(RoutePlan plan) {
     if (plan.path.length < 2) return;
     final bounds = LatLngBounds.fromPoints(plan.path);
-    if (!bounds.isValid) return;
-    unawaited(
-      _mapController.fitCamera(
-        CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
-      ),
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
     );
   }
 
