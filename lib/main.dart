@@ -6,6 +6,7 @@ import 'package:ultralytics_yolo_example/presentation/screens/menu_screen.dart';
 import 'package:ultralytics_yolo_example/presentation/screens/money_detector_screen.dart';
 import 'package:ultralytics_yolo_example/presentation/screens/single_image_screen.dart';
 import 'package:ultralytics_yolo_example/presentation/screens/text_reader_screen.dart';
+import 'package:ultralytics_yolo_example/presentation/screens/route_screen.dart';
 
 import 'package:ultralytics_yolo_example/presentation/screens/depth_camera_screen.dart';
 
@@ -49,6 +50,12 @@ class MyApp extends StatelessWidget {
         if (settings.name == '/text-reader') {
           return MaterialPageRoute(
             builder: (_) => const TextReaderScreen(),
+            settings: settings,
+          );
+        }
+        if (settings.name == '/route') {
+          return MaterialPageRoute(
+            builder: (_) => const RouteScreen(),
             settings: settings,
           );
         }

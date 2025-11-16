@@ -26,8 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string></string>
+<key>NSCameraUsageDescription</key>
+<string></string>
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>CellSay utiliza tu ubicación para mostrar rutas accesibles y transporte en tiempo real.</string>
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>La app necesita la ubicación en segundo plano para guiar con voz cuando la pantalla está bloqueada.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
