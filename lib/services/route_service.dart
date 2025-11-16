@@ -29,17 +29,21 @@ class RouteInstruction {
   RouteInstruction({required this.message, required this.pivot, required this.distanceMeters});
 }
 
+enum RouteProfile { walk, drive, transit }
+
 class RoutePlan {
   final List<LatLng> path;
   final List<RouteInstruction> instructions;
   final double distanceMeters;
   final double durationSeconds;
+  final RouteProfile profile;
 
   RoutePlan({
     required this.path,
     required this.instructions,
     required this.distanceMeters,
     required this.durationSeconds,
+    required this.profile,
   });
 }
 
@@ -112,36 +116,101 @@ class RouteService {
     return places;
   }
 
-  Future<RoutePlan?> buildRoute({required LatLng origin, required LatLng destination}) async {
+  Future<RoutePlan?> buildRoute({
+    required LatLng origin,
+    required LatLng destination,
+    RouteProfile profile = RouteProfile.walk,
+  }) async {
+    final osrmProfile = profile == RouteProfile.drive ? 'driving' : 'foot';
     final url = Uri.parse(
-      'https://router.project-osrm.org/route/v1/foot/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}'
+      'https://router.project-osrm.org/route/v1/$osrmProfile/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}'
       '?overview=full&geometries=geojson&steps=true&annotations=true',
     );
     try {
       final response = await _client
           .get(url, headers: const {'User-Agent': _userAgent})
           .timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return null;
-      final body = jsonDecode(response.body);
-      final routes = body['routes'];
-      if (routes is! List || routes.isEmpty) return null;
-      final best = routes.first;
-      final geometry = best['geometry'];
-      final coordinates = geometry?['coordinates'];
-      final List<LatLng> path = [
-        if (coordinates is List)
-          for (final pair in coordinates)
-            if (pair is List && pair.length >= 2) LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble()),
-      ];
-      final instructions = _extractInstructions(best);
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        final routes = body['routes'];
+        if (routes is List && routes.isNotEmpty) {
+          final best = routes.first;
+          final geometry = best['geometry'];
+          final coordinates = geometry?['coordinates'];
+          final List<LatLng> path = [
+            if (coordinates is List)
+              for (final pair in coordinates)
+                if (pair is List && pair.length >= 2) LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble()),
+          ];
+          final instructions = _extractInstructions(best);
+          return RoutePlan(
+            path: path,
+            instructions: instructions,
+            distanceMeters: (best['distance'] as num?)?.toDouble() ?? 0,
+            durationSeconds: (best['duration'] as num?)?.toDouble() ?? 0,
+            profile: profile,
+          );
+        }
+      } else {
+        developer.log('OSRM responded ${response.statusCode}', name: '[ROUTE]');
+      }
+    } catch (e, st) {
+      developer.log('Route build error $e', name: '[ROUTE]', stackTrace: st);
+    }
+    if (profile == RouteProfile.transit) {
+      return null;
+    }
+    return _buildValhallaRoute(origin: origin, destination: destination, profile: profile);
+  }
+
+  Future<RoutePlan?> _buildValhallaRoute({
+    required LatLng origin,
+    required LatLng destination,
+    required RouteProfile profile,
+  }) async {
+    final uri = Uri.parse('https://valhalla1.openstreetmap.de/route');
+    final body = {
+      'locations': [
+        {'lat': origin.latitude, 'lon': origin.longitude},
+        {'lat': destination.latitude, 'lon': destination.longitude},
+      ],
+      'costing': profile == RouteProfile.drive ? 'auto' : 'pedestrian',
+      'directions_options': {
+        'language': 'es-ES',
+        'units': 'kilometers',
+      },
+      'shape_format': 'polyline6',
+    };
+    try {
+      final response = await _client
+          .post(
+            uri,
+            headers: const {'Content-Type': 'application/json', 'User-Agent': _userAgent},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) {
+        developer.log('Valhalla responded ${response.statusCode}', name: '[ROUTE]');
+        return null;
+      }
+      final decoded = jsonDecode(response.body);
+      final trip = decoded['trip'];
+      if (trip is! Map) return null;
+      final legs = trip['legs'];
+      if (legs is! List || legs.isEmpty) return null;
+      final firstLeg = legs.first;
+      final shape = firstLeg['shape']?.toString();
+      final List<LatLng> path = shape == null ? [] : _decodeValhallaShape(shape);
+      final instructions = _extractValhallaInstructions(firstLeg, path);
       return RoutePlan(
         path: path,
         instructions: instructions,
-        distanceMeters: (best['distance'] as num?)?.toDouble() ?? 0,
-        durationSeconds: (best['duration'] as num?)?.toDouble() ?? 0,
+        distanceMeters: (trip['summary']?['length'] as num? ?? 0) * 1000,
+        durationSeconds: ((trip['summary']?['time'] as num?) ?? 0).toDouble(),
+        profile: profile,
       );
     } catch (e, st) {
-      developer.log('Route build error $e', name: '[ROUTE]', stackTrace: st);
+      developer.log('Valhalla request failed $e', name: '[ROUTE]', stackTrace: st);
       return null;
     }
   }
@@ -317,6 +386,67 @@ class RouteService {
       }
     }
     return instructions;
+  }
+
+  List<RouteInstruction> _extractValhallaInstructions(dynamic leg, List<LatLng> path) {
+    final List<RouteInstruction> instructions = [];
+    if (leg is! Map) return instructions;
+    final maneuvers = leg['maneuvers'];
+    if (maneuvers is! List) return instructions;
+    for (final maneuver in maneuvers) {
+      if (maneuver is! Map) continue;
+      final text = maneuver['instruction']?.toString() ?? '';
+      final length = (maneuver['length'] as num?)?.toDouble() ?? 0;
+      final index = (maneuver['begin_shape_index'] as num?)?.toInt() ?? 0;
+      final pivot = (index >= 0 && index < path.length)
+          ? path[index]
+          : LatLng(
+              (maneuver['lat'] as num? ?? 0).toDouble(),
+              (maneuver['lon'] as num? ?? 0).toDouble(),
+            );
+      final normalized = text.isEmpty ? 'Sigue el recorrido.' : text;
+      instructions.add(
+        RouteInstruction(
+          message: normalized,
+          pivot: pivot,
+          distanceMeters: length * 1000,
+        ),
+      );
+    }
+    return instructions;
+  }
+
+  List<LatLng> _decodeValhallaShape(String shape) {
+    final points = <LatLng>[];
+    int index = 0;
+    int lat = 0;
+    int lon = 0;
+    while (index < shape.length) {
+      final resultLat = _decodeValhallaValue(shape, index);
+      index = resultLat.$2;
+      lat += resultLat.$1;
+
+      final resultLon = _decodeValhallaValue(shape, index);
+      index = resultLon.$2;
+      lon += resultLon.$1;
+
+      points.add(LatLng(lat / 1e6, lon / 1e6));
+    }
+    return points;
+  }
+
+  (int, int) _decodeValhallaValue(String encoded, int startIndex) {
+    int result = 0;
+    int shift = 0;
+    int index = startIndex;
+    int b;
+    do {
+      b = encoded.codeUnitAt(index++) - 63;
+      result |= (b & 0x1F) << shift;
+      shift += 5;
+    } while (b >= 0x20 && index < encoded.length);
+    final delta = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+    return (delta, index);
   }
 
   String _instructionFor({required String type, required String modifier, required String roadName, required double distance}) {
