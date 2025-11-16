@@ -45,7 +45,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _readMenu() async {
     await _speak(
-      'Menú principal. Opciones: Dinero, Objetos, Profundidad, Lectura, Hora, Clima. Diga una opción.',
+      'Menú principal. Opciones: Dinero, Objetos, Profundidad, Lectura, Ruta, Hora, Clima. Diga una opción.',
     );
   }
 
@@ -114,6 +114,13 @@ class _MenuScreenState extends State<MenuScreen> {
       Navigator.pushNamed(context, '/text-reader');
       return;
     }
+    if (t.contains('ruta') || t.contains('camino') || t.contains('mapa')) {
+      await _stt.stop();
+      setState(() => _isListening = false);
+      if (!mounted) return;
+      Navigator.pushNamed(context, '/route');
+      return;
+    }
     if (t.contains('hora')) {
       await _stt.stop();
       setState(() => _isListening = false);
@@ -164,6 +171,11 @@ class _MenuScreenState extends State<MenuScreen> {
         label: 'Lectura',
         icon: Icons.menu_book_rounded,
         onTap: () => Navigator.pushNamed(context, '/text-reader'),
+      ),
+      _BigButton(
+        label: 'Ruta',
+        icon: Icons.route,
+        onTap: () => Navigator.pushNamed(context, '/route'),
       ),
       _BigButton(
         label: 'Hora',
