@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -53,10 +54,24 @@ class ChileTransitService {
   ];
 
   Future<List<TransitVehicle>> fetchVehicles({required LatLng userPosition, double radiusMeters = 2000}) async {
-    final futures = _sources.map((source) => _download(source, userPosition, radiusMeters));
-    final results = await Future.wait(futures, eagerError: false);
-    return results.expand((v) => v).toList()
-      ..sort((a, b) => (a.distanceToUser ?? double.infinity).compareTo(b.distanceToUser ?? double.infinity));
+    final List<TransitVehicle> aggregated = [];
+    var successfulFeeds = 0;
+    for (final source in _sources) {
+      try {
+        final result = await _download(source, userPosition, radiusMeters).timeout(const Duration(seconds: 6));
+        successfulFeeds++;
+        aggregated.addAll(result);
+      } catch (e, st) {
+        developer.log('Transit source ${source.$1} failed: $e', name: '[ROUTE]', stackTrace: st);
+      }
+    }
+    if (aggregated.isEmpty && successfulFeeds == 0) {
+      throw TransitDataUnavailable('No se pudieron consultar feeds en vivo.');
+    }
+    aggregated.sort(
+      (a, b) => (a.distanceToUser ?? double.infinity).compareTo(b.distanceToUser ?? double.infinity),
+    );
+    return aggregated;
   }
 
   Future<List<TransitVehicle>> _download(
@@ -67,7 +82,7 @@ class ChileTransitService {
     final uri = Uri.parse(source.$1);
     final resp = await _client.get(uri, headers: const {'User-Agent': _userAgent});
     if (resp.statusCode != 200) {
-      return [];
+      throw TransitDataUnavailable('Feed ${source.$3} devolvió ${resp.statusCode}');
     }
     final dynamic body = jsonDecode(resp.body);
     final entities = body is Map ? body['entity'] : body;
@@ -104,4 +119,13 @@ class ChileTransitService {
     }
     return parsed;
   }
+}
+
+class TransitDataUnavailable implements Exception {
+  final String message;
+
+  TransitDataUnavailable(this.message);
+
+  @override
+  String toString() => message;
 }
