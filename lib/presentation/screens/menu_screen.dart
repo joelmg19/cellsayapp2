@@ -45,7 +45,7 @@ class _MenuScreenState extends State<MenuScreen> {
 
   Future<void> _readMenu() async {
     await _speak(
-      'Menú principal. Opciones: Dinero, Dinero offline, Objetos, Lectura, Hora y Clima. Diga una opción.',
+      'Menú principal. Opciones: Dinero, Objetos, Lectura, Hora y Clima. Diga una opción.',
     );
   }
 
@@ -86,14 +86,6 @@ class _MenuScreenState extends State<MenuScreen> {
 
   void _handleVoice(String words) async {
     final t = words.toLowerCase();
-    if (t.contains('dinero') &&
-        (t.contains('offline') || t.contains('local') || t.contains('internet'))) {
-      await _stt.stop();
-      setState(() => _isListening = false);
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/money-offline');
-      return;
-    }
     if (t.contains('dinero')) {
       await _stt.stop();
       setState(() => _isListening = false);
@@ -145,16 +137,10 @@ class _MenuScreenState extends State<MenuScreen> {
   @override
   Widget build(BuildContext context) {
     final buttons = <_BigButton>[
-      // 1. Botón para el modo de voz (el que tenías antes)
       _BigButton(
-        label: 'Dinero (API)',
+        label: 'Dinero',
         icon: Icons.attach_money_rounded,
         onTap: () => Navigator.pushNamed(context, '/money'),
-      ),
-      _BigButton(
-        label: 'Dinero Offline',
-        icon: Icons.money_off,
-        onTap: () => Navigator.pushNamed(context, '/money-offline'),
       ),
       _BigButton(
         label: 'Objetos',
@@ -182,10 +168,13 @@ class _MenuScreenState extends State<MenuScreen> {
       appBar: AppBar(
         toolbarHeight: 140,
         centerTitle: true,
-        title: CircleAvatar(
-          radius: 44,
-          backgroundColor: Colors.transparent,
-          backgroundImage: const AssetImage('assets/applogo.png'),
+        title: Semantics(
+          label: 'Logo de CellSay',
+          child: CircleAvatar(
+            radius: 44,
+            backgroundColor: Colors.transparent,
+            backgroundImage: const AssetImage('assets/applogo.png'),
+          ),
         ),
         automaticallyImplyLeading: false,
       ),
@@ -212,10 +201,18 @@ class _MenuScreenState extends State<MenuScreen> {
                   Row(
                     children: [
                       const Spacer(),
-                      FilledButton.icon(
-                        onPressed: _startTalkback,
-                        icon: Icon(_isListening ? Icons.hearing_disabled : Icons.hearing),
-                        label: Text(_isListening ? 'Talback ON' : 'Talback'),
+                      Semantics(
+                        button: true,
+                        label: _isListening
+                            ? 'TalkBack activado, pulsa para desactivar'
+                            : 'TalkBack, pulsa para activar',
+                        child: FilledButton.icon(
+                          onPressed: _startTalkback,
+                          icon: Icon(
+                            _isListening ? Icons.hearing_disabled : Icons.hearing,
+                          ),
+                          label: Text(_isListening ? 'TalkBack ON' : 'TalkBack'),
+                        ),
                       ),
                     ],
                   ),
@@ -245,9 +242,17 @@ class _BigButton extends StatelessWidget {
     return ElevatedButton.icon(
       onPressed: onTap,
       icon: Icon(icon, size: 22),
-      label: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Text(label, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+      label: Semantics(
+        button: true,
+        label: label,
+        hint: 'Abre la opción $label',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+        ),
       ),
       style: ElevatedButton.styleFrom(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
