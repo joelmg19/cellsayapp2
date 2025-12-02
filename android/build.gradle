@@ -1,0 +1,35 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+subprojects { subproject ->
+    subproject.plugins.withId("com.android.library") {
+        def androidExtension = subproject.extensions.findByName("android")
+        if (subproject.name == "tflite_flutter" && androidExtension != null && androidExtension.hasProperty("namespace")) {
+            androidExtension.namespace = "sq.flutter.tflite_flutter"
+        }
+    }
+}
+
+subprojects {
+    configurations.all { configuration ->
+        configuration.exclude group: "org.tensorflow", module: "tensorflow-lite"
+        configuration.exclude group: "org.tensorflow", module: "tensorflow-lite-api"
+        configuration.exclude group: "org.tensorflow", module: "tensorflow-lite-gpu"
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
